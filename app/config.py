@@ -41,6 +41,10 @@ class Settings:
     login_backoff_max_seconds: int = _env_int("TRAVELAI_LOGIN_BACKOFF_MAX_SECONDS", 1800, 1, 86400)
     register_max_attempts: int = _env_int("TRAVELAI_REGISTER_MAX_ATTEMPTS", 3, 1, 1000)
     register_window_seconds: int = _env_int("TRAVELAI_REGISTER_WINDOW_SECONDS", 600, 10, 86400)
+    register_max_accounts: int = _env_int("TRAVELAI_REGISTER_MAX_ACCOUNTS", 10, 1, 1000)
+    register_account_window_seconds: int = _env_int(
+        "TRAVELAI_REGISTER_ACCOUNT_WINDOW_SECONDS", 3600, 60, 86400
+    )
     audit_key: str = os.getenv("TRAVELAI_AUDIT_KEY", "travelai-audit")
     cors_origins: list[str] = field(default_factory=lambda: ["http://localhost:5173", "http://localhost:8000"])
     seed_demo_data: bool = _bool("TRAVELAI_SEED_DEMO", True)

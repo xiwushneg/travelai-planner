@@ -21,7 +21,7 @@ from app.config import settings
 from app.audit import record_audit
 from app.core.models import PlanDiff, PlanningResult, TripSpec
 from app.rag.base import NullRetriever
-from app.repository import UsernameTakenError
+from app.repository import NotFoundError, UsernameTakenError
 
 router = APIRouter()
 logger = logging.getLogger("travelai.auth")
@@ -186,11 +186,18 @@ def health(request: Request):
 def register(payload: AuthRequest, request: Request, response: Response):
     repository = service(request).repository
     ip = client_ip(request)
-    allowed, retry_after = repository.register_attempt(
-        ip, settings.register_max_attempts, settings.register_window_seconds
+    # 双桶限流：重名探测用短窗口，成功建号用小时级配额。
+    # 拆开的目的是共享出口 IP（公司/校园 NAT）下少数正常用户不会把失败配额占满。
+    fail_key = f"{ip}|register-fail"
+    account_key = f"{ip}|register-ok"
+    fail_exceeded, fail_retry = repository.register_quota_exceeded(
+        fail_key, settings.register_max_attempts, settings.register_window_seconds
     )
-    if not allowed:
-        raise rate_limited(retry_after)
+    account_exceeded, account_retry = repository.register_quota_exceeded(
+        account_key, settings.register_max_accounts, settings.register_account_window_seconds
+    )
+    if fail_exceeded or account_exceeded:
+        raise rate_limited(max(fail_retry, account_retry))
     try:
         password_hash = hash_password(payload.password)
     except PasswordPolicyError as exc:
@@ -202,6 +209,9 @@ def register(payload: AuthRequest, request: Request, response: Response):
         user = repository.create_user(normalize_username(payload.username), password_hash)
     except UsernameTakenError:
         # 中性提示：不回显用户名、不声明“已占用”；真实原因只进日志。
+        repository.register_attempt(
+            fail_key, settings.register_max_attempts, settings.register_window_seconds
+        )
         logger.info("register rejected reason=username_taken ip=%s", ip)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -210,6 +220,9 @@ def register(payload: AuthRequest, request: Request, response: Response):
                 "message": "暂时无法完成注册，请更换用户名或直接登录。",
             },
         )
+    repository.register_attempt(
+        account_key, settings.register_max_accounts, settings.register_account_window_seconds
+    )
     return {
         "user": {"id": user["id"], "username": user["username"]},
         **start_session(repository, user["id"], response),
@@ -236,10 +249,12 @@ def login(payload: AuthRequest, request: Request, response: Response):
             "login blocked reason=%s remaining=%ss ip=%s account=%s",
             reason, remaining, ip, account,
         )
-        record_audit(
-            repository, "login_blocked", username=account, ip=ip, result="blocked",
-            detail={"reason": reason, "retry_after_seconds": remaining},
-        )
+        # 退避期内每个请求都写审计会让表迅速膨胀；同一 IP+账号最多每分钟一条。
+        if guard.should_audit_block(ip, account):
+            record_audit(
+                repository, "login_blocked", username=account, ip=ip, result="blocked",
+                detail={"reason": reason, "retry_after_seconds": remaining},
+            )
         raise invalid_credentials()
     if not usable or not matched:
         reason = "unknown_user" if not user else ("inactive_user" if not usable else "bad_password")
@@ -359,7 +374,11 @@ def modify_day(
     trip_id: str, payload: ModifyDayRequest, request: Request,
     user: dict = Depends(current_user),
 ):
-    audit_trip_denial(request, user, trip_id=trip_id)
+    # 先判归属再建 run：越权或不存在时直接 404，避免在库里留下孤儿 agent_run。
+    owner = service(request).repository.get_trip_owner(trip_id)
+    if owner != user["id"]:
+        audit_trip_denial(request, user, trip_id=trip_id)
+        raise NotFoundError(f"行程不存在：{trip_id}")
     result, run_id, difference = service(request).modify_day(
         trip_id=trip_id,
         expected_version=payload.expected_version,

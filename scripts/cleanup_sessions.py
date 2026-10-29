@@ -54,14 +54,17 @@ def main(argv: list[str] | None = None) -> int:
             "dry_run": True,
             "would_delete": count_expired(repository),
             "stale_login_failures": repository.count_stale_login_failures(),
+            "stale_register_attempts": repository.count_stale_register_attempts(),
             "remaining": count_sessions(repository),
         }
     else:
         deleted = repository.delete_expired_sessions()
         deleted_login_failures = repository.delete_stale_login_failures()
+        deleted_register_attempts = repository.delete_stale_register_attempts()
         result = {
             "deleted": deleted,
             "deleted_login_failures": deleted_login_failures,
+            "deleted_register_attempts": deleted_register_attempts,
             "remaining": count_sessions(repository),
         }
 
@@ -70,13 +73,15 @@ def main(argv: list[str] | None = None) -> int:
     elif result.get("dry_run"):
         print(
             f"[dry-run] 将清理过期会话 {result['would_delete']} 个、"
-            f"失效登录计数 {result['stale_login_failures']} 条，"
+            f"失效登录计数 {result['stale_login_failures']} 条、"
+            f"过期注册配额 {result['stale_register_attempts']} 条，"
             f"当前共有 {result['remaining']} 个会话。"
         )
     else:
         print(
             f"已清理过期会话 {result['deleted']} 个、"
-            f"失效登录计数 {result['deleted_login_failures']} 条，"
+            f"失效登录计数 {result['deleted_login_failures']} 条、"
+            f"过期注册配额 {result['deleted_register_attempts']} 条，"
             f"当前剩余 {result['remaining']} 个会话。"
         )
     return 0

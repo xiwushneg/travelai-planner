@@ -88,7 +88,7 @@
 | ID | 风险 | 影响 | 等级 | 处置建议 | 时点 |
 |---|---|---|---|---|---|
 | R1 | CSRF 防护依赖“同源 + JSON-only + SameSite=lax + 无 CORS” | 条件被打破后跨站写请求可利用 | 中 | 触发 5 个条件任一时先升级双提交 Cookie/完整 token；现有守护测试会拦截代码侧变更 | 持续 |
-| R2 | 注册限流仅在进程内存 | 多实例部署可绕过 | 中 | **已解决**：2026-10-29 改为 `register_attempts` 落 SQLite，多实例共享计数 | 已处置 |
+| R2 | 注册限流口径过粗（成功与失败同桶、仅进程内存） | 共享出口 IP 的正常用户会被误伤；多实例可绕过 | 中 | **已解决**：2026-10-29 改为 `register_attempts` 落 SQLite 双桶 —— 重名失败 3 次/10 分钟、成功建号 10 次/小时，多实例共享计数；过期行由清理任务删除 | 已处置 |
 | R3 | 审计可被删改、长期膨胀、整库回滚不可见 | 有库权限即可删改；回滚可抹掉近期证据 | 中 | **已缓解**：HMAC 哈希链 + `verify_audit_chain.py` 校验 + `audit_retention.py` 留存清理；水位锚点 `<db>.audit-anchor.json` 发现整库回滚（退出码 1）。锚点同机存放，需配合备份权限收敛并定期把锚点导出到外部存储 | 已处置 |
 | R4 | 无自助改密/找回 | 用户只能找管理员 | 中 | 已有管理员 CLI 兜底；邮箱/短信找回明确不做 | 接受 |
 | R5 | 管理员重置脚本仅依赖服务器权限，无二次审批 | 内部人员可重置任意账号 | 中 | 重置事件已审计；限制服务器登录与脚本权限 | 上线前（权限收敛） |
@@ -111,7 +111,7 @@
 - [ ] 审计留存清理：`scripts/audit_retention.py --days 180`，并定期运行 `scripts/verify_audit_chain.py` 校验哈希链与锚点（输出 `anchor=ok`）
 - [ ] 首次上线或审计密钥轮换后，执行 `scripts/verify_audit_chain.py --update-anchor` 建立锚点基线，并把 `<db>.audit-anchor.json` 纳入备份外的独立保管
 - [ ] 审计查询权限收敛（`scripts/audit_query.py` 只读打开）
-- [ ] 复跑 `pytest -q`（当前 80 passed）与 `scripts/http_smoke.py`
+- [ ] 复跑 `pytest -q`（当前 83 passed）与 `scripts/http_smoke.py`
 - [x] 已执行：legacy 数据 claim 至 `duanjiabao118`（2026-10-29，备份 `data/backups/travelai-20261029-223729.db`），`legacy_trips` 现为 0
 
 ## 7. 复验命令（逐项对应第 6 节清单）
@@ -197,7 +197,7 @@ schtasks /query /tn "TravelAI Session Cleanup"   # Linux 用 crontab -l
 **⑨ 自动化测试与冒烟**
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q          # 期望 80 passed
+.\.venv\Scripts\python.exe -m pytest -q          # 期望 83 passed
 .\.venv\Scripts\python.exe scripts\http_smoke.py
 ```
 

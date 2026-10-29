@@ -145,6 +145,32 @@ def test_other_users_trip_is_hidden_as_404(tmp_path):
         assert alice.get("/api/v1/trips").json()["trips"][0]["trip_id"] == trip_id
 
 
+def test_denied_modify_day_leaves_no_orphan_run(tmp_path):
+    """越权改某天时先判归属，不应在攻击者名下留下空 run。"""
+    app = make_app(tmp_path, "orphan-run.db")
+    with TestClient(app) as alice, TestClient(app) as bob:
+        register(alice, "alice")
+        register(bob, "bob")
+        created = alice.post("/api/v1/trips", json=trip_payload())
+        assert created.status_code == 201, created.text
+        trip_id = created.json()["trip_id"]
+
+        denied = bob.post(f"/api/v1/trips/{trip_id}/modify-day", json={
+            "expected_version": 1,
+            "day_number": 1,
+            "desired_spot_ids": ["tokyo-sensoji"],
+        })
+        assert denied.status_code == 404
+
+    repository = app.state.planning_service.repository
+    bob_id = repository.get_user_by_username("bob")["id"]
+    with repository.connect() as conn:
+        orphan = conn.execute(
+            "SELECT count(*) FROM agent_runs WHERE owner_id=?", (bob_id,)
+        ).fetchone()[0]
+    assert orphan == 0
+
+
 def test_expired_session_returns_401(tmp_path):
     app = make_app(tmp_path)
     with TestClient(app) as api:

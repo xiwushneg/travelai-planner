@@ -280,9 +280,10 @@ class Repository:
         return user_id, revoked
 
     def register_attempt(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
-        """注册尝试计数落库，多实例共享；返回 (是否允许, 建议等待秒数)。
+        """注册配额计数落库，多实例共享；返回 (是否允许, 建议等待秒数)。
 
-        固定窗口：窗口内成功与失败都计数，避免注册接口被用来探测账号。
+        固定窗口计数：调用方按用途分成“重名失败”和“成功建号”两个 key，
+        避免共享出口 IP 下的正常注册把失败配额占满。
         """
         now = datetime.now(timezone.utc)
         window = max(1, int(window_seconds))
@@ -317,10 +318,52 @@ class Repository:
                 conn.rollback()
                 raise
 
+    def register_quota_exceeded(
+        self, key: str, limit: int, window_seconds: int
+    ) -> tuple[bool, int]:
+        """只读检查注册配额是否用尽；返回 (是否超限, 建议等待秒数)。"""
+        now = datetime.now(timezone.utc)
+        window = max(1, int(window_seconds))
+        limit = max(1, int(limit))
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT window_start,count FROM register_attempts WHERE key=?", (key,)
+            ).fetchone()
+        if row is None:
+            return False, 0
+        elapsed = (now - datetime.fromisoformat(row["window_start"])).total_seconds()
+        if elapsed >= window:
+            return False, 0
+        if row["count"] >= limit:
+            return True, max(1, math.ceil(window - elapsed))
+        return False, 0
+
     def delete_expired_sessions(self) -> int:
         with self.connect() as conn:
             cursor = conn.execute("DELETE FROM sessions WHERE expires_at<=?", (utcnow(),))
         return cursor.rowcount
+
+    def delete_stale_register_attempts(self, older_than_seconds: int = 86400) -> int:
+        """删除已过窗口的注册配额行：窗口一旦过期就等价于不存在，可安全清理。"""
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+        ).isoformat()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM register_attempts WHERE window_start<?", (cutoff,)
+            )
+        return cursor.rowcount
+
+    def count_stale_register_attempts(self, older_than_seconds: int = 86400) -> int:
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+        ).isoformat()
+        with self.connect() as conn:
+            return int(
+                conn.execute(
+                    "SELECT count(*) FROM register_attempts WHERE window_start<?", (cutoff,)
+                ).fetchone()[0]
+            )
 
     def delete_stale_login_failures(self, older_than_seconds: int = 86400) -> int:
         """删除长期无活动的失败计数，避免随机用户名探测把表撑大。"""

@@ -69,7 +69,11 @@ def test_login_backoff_is_indistinguishable_from_bad_password(tmp_path):
     assert state["blocked_until"]
 
 
-def test_register_rate_limit(tmp_path):
+def test_register_rate_limit(tmp_path, monkeypatch):
+    """成功建号走独立配额（默认 10 次/小时），这里按 3 次验证用尽后 429。"""
+    monkeypatch.setattr(
+        routes_module, "settings", Settings(register_max_accounts=3)
+    )
     app = create_app(str(tmp_path / "register-limit.db"))
     with TestClient(app) as client:
         for index in range(3):
@@ -174,35 +178,59 @@ def test_trust_proxy_header_is_opt_in(tmp_path, monkeypatch):
     assert trusted_repository.get_login_failure("ip", "10.1.0.1")["fail_count"] == 1
 
 
-def test_register_limit_shared_across_instances(tmp_path):
-    """计数落在 SQLite，第二个应用实例同样受限，证明跨进程共享。"""
+def test_register_failure_quota_shared_across_instances(tmp_path):
+    """重名失败计数落在 SQLite，第二个应用实例同样受限，证明跨进程共享。"""
     db_path = str(tmp_path / "shared-register.db")
     first_app = create_app(db_path)
     with TestClient(first_app) as client:
-        for index in range(3):
+        assert client.post(
+            "/api/v1/auth/register",
+            json={"username": "shared-user", "password": PASSWORD},
+        ).status_code == 201
+        for _ in range(3):
             assert client.post(
                 "/api/v1/auth/register",
-                json={"username": f"shared-{index}", "password": PASSWORD},
-            ).status_code == 201
+                json={"username": "shared-user", "password": PASSWORD},
+            ).status_code == 409
 
     second_app = create_app(db_path)
     with TestClient(second_app) as client:
         blocked = client.post(
             "/api/v1/auth/register",
-            json={"username": "shared-final", "password": PASSWORD},
+            json={"username": "shared-fresh", "password": PASSWORD},
         )
     assert blocked.status_code == 429
     assert blocked.json()["detail"]["code"] == "RATE_LIMITED"
     assert int(blocked.headers["retry-after"]) >= 1
-    second_repository = second_app.state.planning_service.repository
-    assert second_repository.register_attempt("testclient", 3, 600)[1] >= 1
 
 
-def test_register_window_resets_after_expiry(tmp_path):
-    app = create_app(str(tmp_path / "window.db"))
+def test_successful_register_does_not_consume_failure_quota(tmp_path):
+    """正常建号走独立的小时级配额，不会挤占重名探测的失败配额（共享 NAT 场景）。"""
+    app = create_app(str(tmp_path / "register-buckets.db"))
     repository = app.state.planning_service.repository
     with TestClient(app) as client:
         for index in range(3):
+            assert client.post(
+                "/api/v1/auth/register",
+                json={"username": f"bucket-{index}", "password": PASSWORD},
+            ).status_code == 201
+        duplicate = client.post(
+            "/api/v1/auth/register",
+            json={"username": "bucket-0", "password": PASSWORD},
+        )
+    assert duplicate.status_code == 409
+    exceeded, _ = repository.register_quota_exceeded("testclient|register-fail", 3, 600)
+    assert exceeded is False
+
+
+def test_register_success_quota_resets_after_expiry(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        routes_module, "settings", Settings(register_max_accounts=2)
+    )
+    app = create_app(str(tmp_path / "window.db"))
+    repository = app.state.planning_service.repository
+    with TestClient(app) as client:
+        for index in range(2):
             assert client.post(
                 "/api/v1/auth/register",
                 json={"username": f"window-{index}", "password": PASSWORD},
@@ -221,4 +249,24 @@ def test_register_window_resets_after_expiry(tmp_path):
             json={"username": "window-5", "password": PASSWORD},
         )
     assert allowed.status_code == 201
+
+
+def test_repeated_blocked_login_writes_one_audit_row(tmp_path):
+    """退避期内每个请求都写审计会把表刷爆；同一 IP+账号每分钟只落一条。"""
+    app = create_app(str(tmp_path / "block-audit.db"))
+    with TestClient(app) as client:
+        for index in range(5):
+            assert client.post(
+                "/api/v1/auth/login",
+                json={"username": f"blocked-ghost-{index}", "password": PASSWORD},
+            ).status_code == 401
+        for _ in range(3):
+            assert client.post(
+                "/api/v1/auth/login",
+                json={"username": "blocked-probe", "password": PASSWORD},
+            ).status_code == 401
+
+    repository = app.state.planning_service.repository
+    blocked_events = repository.list_audit_events(limit=100, event_type="login_blocked")
+    assert len(blocked_events) == 1
 

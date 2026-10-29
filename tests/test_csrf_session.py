@@ -122,12 +122,14 @@ def test_cleanup_script_deletes_expired_and_is_idempotent(tmp_path):
     assert first.returncode == 0, first.stderr
     first_result = json.loads(first.stdout)
     assert first_result == {
-        "deleted": 2, "deleted_login_failures": 0, "remaining": 1
+        "deleted": 2, "deleted_login_failures": 0,
+        "deleted_register_attempts": 0, "remaining": 1,
     }
 
     second = run_script("--db", str(db_path), "--json")
     assert json.loads(second.stdout) == {
-        "deleted": 0, "deleted_login_failures": 0, "remaining": 1
+        "deleted": 0, "deleted_login_failures": 0,
+        "deleted_register_attempts": 0, "remaining": 1,
     }
 
     assert client.get("/api/v1/auth/me").status_code == 200

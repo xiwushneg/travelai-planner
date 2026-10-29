@@ -1,6 +1,7 @@
 """登录失败计数与指数退避：状态存 SQLite，跨进程可见。"""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -39,12 +40,15 @@ class LoginGuard:
         base_seconds: int,
         max_seconds: int,
         decay_seconds: int = 86400,
+        block_audit_interval_seconds: int = 60,
     ):
         self.repository = repository
         self.threshold = max(1, threshold)
         self.base_seconds = max(1, base_seconds)
         self.max_seconds = max(self.base_seconds, max_seconds)
         self.decay_seconds = max(1, decay_seconds)
+        self.block_audit_interval_seconds = max(1, block_audit_interval_seconds)
+        self._block_audit_at: dict[tuple[str, str], float] = {}
 
     def _active_state(self, scope: str, key: str, now: datetime) -> Optional[dict]:
         state = self.repository.get_login_failure(scope, key)
@@ -86,3 +90,22 @@ class LoginGuard:
 
     def clear_account(self, account: str) -> None:
         self.repository.clear_login_failures(SCOPE_ACCOUNT, account)
+
+    def should_audit_block(self, ip: str, account: str) -> bool:
+        """退避期内同一 IP+账号的审计最多每 interval 秒一条，避免审计表被刷爆。
+
+        进程内节流：多实例部署时每个实例各写一条，数量仍与实例数同阶。
+        """
+        now = time.monotonic()
+        key = (ip, account)
+        last = self._block_audit_at.get(key)
+        if last is not None and now - last < self.block_audit_interval_seconds:
+            return False
+        if len(self._block_audit_at) >= 2048:
+            self._block_audit_at = {
+                item: stamp
+                for item, stamp in self._block_audit_at.items()
+                if now - stamp < self.block_audit_interval_seconds
+            }
+        self._block_audit_at[key] = now
+        return True
