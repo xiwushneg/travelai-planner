@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Optional
 
+from app.audit_anchor import update_anchor
 from app.config import settings
 
 logger = logging.getLogger("travelai.audit")
@@ -99,9 +100,11 @@ def record_audit(
 ) -> Optional[str]:
     actor_key = hash_identifier(username.lower()) if username else None
     try:
-        return repository.add_audit_event(
+        event_id = repository.add_audit_event(
             event_type, actor_key, ip, result, _sanitize(detail)
         )
     except Exception as exc:  # 审计不可用不应阻断登录或请求
         logger.warning("audit write failed event=%s error=%s", event_type, exc)
         return None
+    update_anchor(repository)
+    return event_id

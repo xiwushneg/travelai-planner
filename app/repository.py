@@ -695,15 +695,42 @@ class Repository:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def delete_audit_events_before(self, cutoff: str) -> int:
+    def audit_watermark(self) -> dict:
+        """审计水位：最大 rowid、总行数与该行链头哈希，供外部锚点检测整库回滚。"""
         with self.connect() as conn:
-            cursor = conn.execute("DELETE FROM audit_events WHERE created_at<?", (cutoff,))
+            head = conn.execute(
+                "SELECT rowid AS rid, entry_hash FROM audit_events ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            total = conn.execute("SELECT count(*) FROM audit_events").fetchone()[0]
+        return {
+            "max_rowid": head["rid"] if head else 0,
+            "event_count": total,
+            "head_hash": head["entry_hash"] if head else None,
+        }
+
+    def audit_hash_at(self, rowid: int) -> Optional[str]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT entry_hash FROM audit_events WHERE rowid=?", (rowid,)
+            ).fetchone()
+        return row["entry_hash"] if row else None
+
+    def delete_audit_events_before(self, cutoff: str) -> int:
+        """删除过期事件，但始终保留最大 rowid 一行，避免外部锚点的水位行被清空。"""
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM audit_events WHERE created_at<? "
+                "AND rowid<(SELECT max(rowid) FROM audit_events)",
+                (cutoff,),
+            )
         return cursor.rowcount
 
     def count_audit_events_before(self, cutoff: str) -> int:
         with self.connect() as conn:
             return conn.execute(
-                "SELECT count(*) FROM audit_events WHERE created_at<?", (cutoff,)
+                "SELECT count(*) FROM audit_events WHERE created_at<? "
+                "AND rowid<(SELECT max(rowid) FROM audit_events)",
+                (cutoff,),
             ).fetchone()[0]
 
     def count_audit_events(self) -> int:

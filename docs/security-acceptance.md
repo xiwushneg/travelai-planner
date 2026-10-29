@@ -58,14 +58,14 @@
 
 查询方式：`python scripts/audit_query.py --limit N [--event ...] [--username ...] [--json]`（只读打开数据库）。
 
-已知局限（不变）：
+已知局限：
 
-- 无防篡改：有数据库写权限者可删除或改写记录。
-- 无留存策略：长期运行需要归档或清理任务。
+- 哈希链只能发现单条记录被改写或删除；整库回滚靠外部锚点（`<db>.audit-anchor.json`，HMAC 签名）检测，但锚点与库同机存放，攻击者若连同锚点一起回滚或删除，仍无法识别。
+- 留存清理由 `scripts/audit_retention.py` 手动或计划任务触发，不内置排期。
 - 用户名只存哈希，IP 受 NAT/代理影响，无法定位到具体自然人。
 - 审计写入是尽力而为，失败只记 warning，不能证明“某事件一定没发生”。
 
-如需补齐防篡改或留存能力，属于后续独立改动，不在本轮范围。
+如需把锚点推送到外部只读存储（WORM/对象存储）或接入实时告警，属于后续独立改动，不在本轮范围。
 
 ## 4. 加固措施与验证状态
 
@@ -76,7 +76,7 @@
 | 数据隔离 | `trips`/`trip_versions`/`agent_runs` 均有 `owner_id`；他人资源返回 404 | 验收用例 4、5 | 已满足 |
 | 防爆破 | IP + 账号双维度计数，5 次失败后 30s 起指数退避、30min 封顶；成功登录清账号计数 | 验收用例 2 | 已满足 |
 | 响应一致性 | 失败统一 401 + 同一文案；未知账号也执行一次 dummy bcrypt | 验收用例 3 | 已满足 |
-| 审计 | 6 类事件落库（登录成功/失败/限流、越权、密码重置、批量登出）；用户名哈希；过滤敏感字段 | 验收用例 7 | 已满足（防篡改/留存未做） |
+| 审计 | 6 类事件落库（登录成功/失败/限流、越权、密码重置、批量登出）；用户名哈希；过滤敏感字段；HMAC 哈希链 + 外部锚点 + 留存脚本 | 验收用例 7 + `tests/test_audit_chain.py` | 已满足（防篡改与回滚检测，无告警） |
 | 可恢复性 | `admin_reset_password.py`（精确用户名 + 显式确认 + 一次性密码）重置并吊销全部会话；`POST /auth/logout-all` | 测试 + 验收用例 6 | 已满足 |
 | CSRF | 同源 + 写接口 JSON-only + SameSite=lax + 无 CORS；5 个失效条件已文档化并有守护测试 | 验收用例 8 + 守护测试 | 维持现状（有前置条件） |
 | Secure / 环境 | `production` 下未开 Secure 拒绝启动；模板默认 production + Secure | 验收用例 9 | 已满足（需 HTTPS 部署） |
@@ -89,7 +89,7 @@
 |---|---|---|---|---|---|
 | R1 | CSRF 防护依赖“同源 + JSON-only + SameSite=lax + 无 CORS” | 条件被打破后跨站写请求可利用 | 中 | 触发 5 个条件任一时先升级双提交 Cookie/完整 token；现有守护测试会拦截代码侧变更 | 持续 |
 | R2 | 注册限流仅在进程内存 | 多实例部署可绕过 | 中 | **已解决**：2026-10-29 改为 `register_attempts` 落 SQLite，多实例共享计数 | 已处置 |
-| R3 | 审计表无防篡改、无留存策略 | 有库权限即可删改；长期膨胀 | 中 | **已缓解**：HMAC 哈希链 + `verify_audit_chain.py` 校验 + `audit_retention.py` 留存清理；整库回滚到旧备份仍可绕过，需配合备份权限收敛 | 已处置 |
+| R3 | 审计可被删改、长期膨胀、整库回滚不可见 | 有库权限即可删改；回滚可抹掉近期证据 | 中 | **已缓解**：HMAC 哈希链 + `verify_audit_chain.py` 校验 + `audit_retention.py` 留存清理；水位锚点 `<db>.audit-anchor.json` 发现整库回滚（退出码 1）。锚点同机存放，需配合备份权限收敛并定期把锚点导出到外部存储 | 已处置 |
 | R4 | 无自助改密/找回 | 用户只能找管理员 | 中 | 已有管理员 CLI 兜底；邮箱/短信找回明确不做 | 接受 |
 | R5 | 管理员重置脚本仅依赖服务器权限，无二次审批 | 内部人员可重置任意账号 | 中 | 重置事件已审计；限制服务器登录与脚本权限 | 上线前（权限收敛） |
 | R6 | SQLite 单文件，多实例写竞争 | 高并发下写入排队/超时 | 中 | 单写实例或迁移 Postgres | 延后 |
@@ -108,9 +108,10 @@
 - [ ] 代理层补齐 HSTS、CSP、`X-Frame-Options`、`X-Content-Type-Options`
 - [ ] 迁移前备份 `data/backups/*.db`，并验证回滚脚本可用
 - [x] 已注册每日清理任务（会话 + 失效登录计数）：`TravelAI-CleanupSessions`，03:30，日志 `logs/cleanup.log`
-- [ ] 审计留存清理：`scripts/audit_retention.py --days 180`，并定期运行 `scripts/verify_audit_chain.py` 校验哈希链
+- [ ] 审计留存清理：`scripts/audit_retention.py --days 180`，并定期运行 `scripts/verify_audit_chain.py` 校验哈希链与锚点（输出 `anchor=ok`）
+- [ ] 首次上线或审计密钥轮换后，执行 `scripts/verify_audit_chain.py --update-anchor` 建立锚点基线，并把 `<db>.audit-anchor.json` 纳入备份外的独立保管
 - [ ] 审计查询权限收敛（`scripts/audit_query.py` 只读打开）
-- [ ] 复跑 `pytest -q`（当前 77 passed）与 `scripts/http_smoke.py`
+- [ ] 复跑 `pytest -q`（当前 80 passed）与 `scripts/http_smoke.py`
 - [x] 已执行：legacy 数据 claim 至 `duanjiabao118`（2026-10-29，备份 `data/backups/travelai-20261029-223729.db`），`legacy_trips` 现为 0
 
 ## 7. 复验命令（逐项对应第 6 节清单）
@@ -184,16 +185,19 @@ schtasks /query /tn "TravelAI Session Cleanup"   # Linux 用 crontab -l
 
 第一条应返回 `{"dry_run": true, ...}`；第二条确认计划任务已注册。
 
-**⑧ 审计只读查询**
+**⑧ 审计只读查询与完整性校验**
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\audit_query.py --limit 5 --json
+.\.venv\Scripts\python.exe scripts\verify_audit_chain.py --json   # 期望 rollback.status = ok，退出码 0
 ```
+
+若输出 `missing_anchor`，执行 `--update-anchor` 建立基线；若输出 `invalid_anchor`，先确认是否轮换过 `TRAVELAI_AUDIT_KEY`，确认无误后再重建。`rollback` 或 `fork` 表示整库回滚/改写，需立即封存备份并排查。
 
 **⑨ 自动化测试与冒烟**
 
 ```powershell
-\.\.venv\Scripts\python.exe -m pytest -q          # 期望 71 passed
+.\.venv\Scripts\python.exe -m pytest -q          # 期望 80 passed
 .\.venv\Scripts\python.exe scripts\http_smoke.py
 ```
 

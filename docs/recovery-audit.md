@@ -7,7 +7,10 @@
 | 文件 | 改动 |
 |---|---|
 | `app/repository.py` | 新增 `audit_events` 表与 `idx_sessions_user` 索引；新增 `delete_sessions_for_user`、`get_user_exact`、`reset_password_and_revoke_sessions`、`get_trip_owner`、`get_run_owner`、`add_audit_event`、`list_audit_events`。行程/运行/用户/会话的既有查询与写入未改。 |
-| `app/audit.py`（新建） | 审计写入封装：用户标识用 HMAC-SHA256(`TRAVELAI_AUDIT_KEY`, username.lower())[:32] 不可逆哈希；明细中自动剔除含 password/token/cookie/secret/authorization 的字段；事件按 HMAC 哈希链串联（`prev_hash`/`entry_hash`），写入失败只记 warning，不阻断登录。 |
+| `app/audit.py`（新建） | 审计写入封装：用户标识用 HMAC-SHA256(`TRAVELAI_AUDIT_KEY`, username.lower())[:32] 不可逆哈希；明细中自动剔除含 password/token/cookie/secret/authorization 的字段；事件按 HMAC 哈希链串联（`prev_hash`/`entry_hash`），写入失败只记 warning，不阻断登录；每次写入后推进外部锚点。 |
+| `app/audit_anchor.py`（新建） | 外部锚点：把“最大 rowid + 链头哈希 + 更新时间”写到 `<db>.audit-anchor.json`，用 `TRAVELAI_AUDIT_KEY` 做 HMAC 签名；只允许水位前进，签名失效时不覆盖已有锚点。 |
+| `scripts/verify_audit_chain.py`（新建） | 只读校验哈希链 + 对比锚点，输出 `ok` / `rollback` / `fork` / `anchor_stale` / `invalid_anchor` / `missing_anchor`；`--update-anchor` 用于建立或重建基线。 |
+| `scripts/audit_retention.py`（新建） | 按天数删除过期审计（保留最大 rowid 一行作为锚点行），支持 `--dry-run` / `--json`，幂等。 |
 | `app/api/routes.py` | 登录成功/失败/被退避分别写入 `login_succeeded` / `login_failed` / `login_blocked`；新增 `POST /api/v1/auth/logout-all`；5 个行程/运行入口（GET trip、versions、diff、modify-day、runs）先判断“存在但归属他人”，命中则写 `trip_access_denied`，响应仍是 404。 |
 | `scripts/admin_reset_password.py`（新建） | 管理员重置密码：必须显式 `--confirm reset-password`；用户名精确匹配（区分大小写、禁止通配符/前后空格）；默认生成 20 位随机密码并**只打印一次**；重置与吊销会话在同一事务；写 `password_reset` 审计。 |
 | `scripts/audit_query.py`（新建） | 只读审计查询（`file:...?mode=ro`），支持 `--limit`、`--event`、`--username`（自动哈希）、`--json`。 |
@@ -90,21 +93,23 @@ DROP INDEX IF EXISTS idx_sessions_user;
 - 某账号是否主动执行了“登出所有设备”。
 - 事件是否来自 CLI（`ip="cli"`）还是 HTTP（真实 IP）。
 - 按哈希标识关联同一账号的多次事件（`audit_query.py --username` 自动哈希比对）。
+- 审计记录是否被改写或整库回滚：`scripts/verify_audit_chain.py` 返回 `ok` / `fork` / `rollback`。
 
 ## 6. 审计不能回答什么
 
 - **不能还原原始用户名/IP 归属**：用户名只存哈希；IP 是直连或（开启信任代理时）XFF 首段，NAT/代理后无法定位到自然人。
-- **不能证明“没有发生”**：审计写入是尽力而为（失败只告警），极端情况下可能缺行；哈希链只能发现单条记录被改写或删除，整库回滚到旧备份仍无法识别。
+- **不能证明“没有发生”**：审计写入是尽力而为（失败只告警），极端情况下可能缺行；哈希链只能发现单条记录被改写或删除，整库回滚由外部锚点（`<db>.audit-anchor.json`）的水位对比发现，但锚点与库同机，若两者一起回滚或删除仍无法识别。
 - **不能覆盖未记录的行为**：注册、普通登出、行程读取/修改本身不记录，只有越权 404 与登录相关事件入库。
 - **不能做实时告警**：只有落库与查询，没有阈值告警与聚合报表；留存清理由 `scripts/audit_retention.py` 手动或计划任务触发。
 - **不能替代会话审计**：没有记录会话 ID/设备指纹，无法回答“哪台设备在使用”。
 - **不能证明密码安全**：审计不记录密码、token、Cookie，因此无法从审计判断是否发生凭据泄露，只能看到使用行为。
-- **不是合规级审计**：哈希链只能发现单条篡改，无 WORM 存储、无外部时间戳，仅适合最小排查用途。
+- **不是合规级审计**：哈希链与本地锚点只能发现篡改与回滚，无 WORM 存储、无外部时间戳，仅适合最小排查用途。
 
 ## 7. 剩余风险与后续
 
-1. 审计留存：`scripts/audit_retention.py --days 180` 已提供；上线时纳入计划任务，并定期 `scripts/verify_audit_chain.py` 校验哈希链。
-2. 管理员脚本本身无二次身份校验，依赖服务器登录权限（建议限制为运维账号可执行）。
-3. 越权审计依赖额外一次 owner 查询，高并发下有轻微开销。
-4. 自助改密/忘记密码仍未提供；当前恢复路径只有管理员重置。
-5. 多实例部署时审计写入走同一 SQLite，写竞争会增加，需要迁移到集中存储。
+1. 审计留存与完整性：`scripts/audit_retention.py --days 180` 清理过期事件（保留最大 rowid 一行作为水位锚点行）；定期执行 `scripts/verify_audit_chain.py` 校验哈希链与锚点，`rollback`/`fork` 时退出码 1。锚点文件 `<db>.audit-anchor.json` 需与数据库分开保管（不要和 `.db` 一起回滚），建议定期导出到外部存储。
+2. 锚点与库同机存放，拥有主机写权限者可以成对回滚；彻底解决需要外部只读存储或日志外发。
+3. 管理员脚本本身无二次身份校验，依赖服务器登录权限（建议限制为运维账号可执行）。
+4. 越权审计依赖额外一次 owner 查询，高并发下有轻微开销。
+5. 自助改密/忘记密码仍未提供；当前恢复路径只有管理员重置。
+6. 多实例部署时审计写入走同一 SQLite，写竞争会增加，需要迁移到集中存储。

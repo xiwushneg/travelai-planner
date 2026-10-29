@@ -125,7 +125,7 @@ Dockerfile 使用 Node 构建前端，再用 Python 运行同源应用，数据�
 4. 验证方式：登录响应的 `Set-Cookie` 必须同时包含 `HttpOnly`、`Secure`、`SameSite=lax`，且通过 `https://` 访问时浏览器能保存会话。
 5. 注册每日清理任务（会话 + 失效登录计数）：`powershell -ExecutionPolicy Bypass -File scripts\register_cleanup_task.ps1`；日志写入 `logs/cleanup.log`，卸载用 `Unregister-ScheduledTask -TaskName TravelAI-CleanupSessions`。容器化部署时脚本已打进镜像，改用
    `docker exec <容器> python scripts/cleanup_sessions.py --json`（重置密码、审计查询同理）。
-6. 审计留存与完整性：`python scripts/audit_retention.py --days 180 --dry-run` 预览，去掉 `--dry-run` 执行；定期用 `python scripts/verify_audit_chain.py --json` 校验哈希链，断链时退出码为 1。旧库首次启用需执行 `python scripts/migrate_audit_chain.py --apply`（历史记录保持 legacy，仅新记录入链）。
+6. 审计留存与完整性：`python scripts/audit_retention.py --days 180 --dry-run` 预览，去掉 `--dry-run` 执行；定期用 `python scripts/verify_audit_chain.py --json` 校验哈希链与锚点（断链或疑似整库回滚时退出码为 1）。旧库首次启用需执行 `python scripts/migrate_audit_chain.py --apply`（历史记录保持 legacy，仅新记录入链），随后执行 `python scripts/verify_audit_chain.py --update-anchor` 建立锚点基线；锚点文件 `<db>.audit-anchor.json` 要独立保管，不要与 `.db` 备份一起回滚。
 
 完整验收记录见 `docs/security-acceptance.md`。
 
