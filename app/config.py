@@ -37,6 +37,9 @@ class Settings:
     cookie_secure: bool = _bool("TRAVELAI_COOKIE_SECURE", False)
     trust_proxy_headers: bool = _bool("TRAVELAI_TRUST_PROXY", False)
     login_failure_threshold: int = _env_int("TRAVELAI_LOGIN_FAILURE_THRESHOLD", 5, 1, 100)
+    login_account_lock_threshold: int = _env_int(
+        "TRAVELAI_LOGIN_ACCOUNT_LOCK_THRESHOLD", 25, 5, 1000
+    )
     login_backoff_base_seconds: int = _env_int("TRAVELAI_LOGIN_BACKOFF_BASE_SECONDS", 30, 1, 3600)
     login_backoff_max_seconds: int = _env_int("TRAVELAI_LOGIN_BACKOFF_MAX_SECONDS", 1800, 1, 86400)
     register_max_attempts: int = _env_int("TRAVELAI_REGISTER_MAX_ATTEMPTS", 3, 1, 1000)

@@ -103,6 +103,30 @@ def test_production_requires_secure_cookie(tmp_path, monkeypatch):
         create_app(str(tmp_path / "rejected.db"))
 
 
+def test_production_hides_api_docs(tmp_path, monkeypatch):
+    production = Settings(
+        environment="production",
+        cookie_secure=True,
+        audit_key="production-audit-key-0123456789",
+    )
+    monkeypatch.setattr(main_module, "settings", production)
+    app = create_app(str(tmp_path / "prod-docs.db"))
+    assert app.docs_url is None
+    assert app.redoc_url is None
+    assert app.openapi_url is None
+    with TestClient(app) as client:
+        schema = client.get("/openapi.json")
+    # 兜底路由可能返回 SPA 页面或 JSON 404，但都不应包含 OpenAPI schema。
+    assert '"openapi"' not in schema.text
+    assert '"paths"' not in schema.text
+
+
+def test_development_keeps_api_docs(tmp_path):
+    app = create_app(str(tmp_path / "dev-docs.db"))
+    assert app.docs_url == "/docs"
+    assert app.openapi_url == "/openapi.json"
+
+
 def test_production_requires_custom_audit_key():
     with pytest.raises(RuntimeError):
         validate_settings(

@@ -265,7 +265,7 @@ def login(payload: AuthRequest, request: Request, response: Response):
             detail={"reason": reason},
         )
         raise invalid_credentials()
-    guard.clear_account(account)
+    guard.clear_account(account, ip)
     record_audit(
         repository, "login_succeeded", username=account, ip=ip, result="success"
     )

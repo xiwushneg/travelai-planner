@@ -26,11 +26,16 @@ class UTF8JSONResponse(JSONResponse):
 
 def create_app(db_path: str | None = None, web_dist: str | None = None) -> FastAPI:
     validate_settings(settings)
+    is_production = settings.environment == "production"
     app = FastAPI(
         title=settings.app_name,
         version=settings.version,
         description="旅行规划 Web 工作台 + 确定性排程 + 可选证据检索 + 不可变版本",
         default_response_class=UTF8JSONResponse,
+        # 生产环境不暴露 /docs、/redoc 与 OpenAPI schema，减少攻击面。
+        docs_url=None if is_production else "/docs",
+        redoc_url=None if is_production else "/redoc",
+        openapi_url=None if is_production else "/openapi.json",
     )
     repository = Repository(db_path or settings.db_path)
     if settings.seed_demo_data and not repository.list_spots():
@@ -43,6 +48,7 @@ def create_app(db_path: str | None = None, web_dist: str | None = None) -> FastA
         threshold=settings.login_failure_threshold,
         base_seconds=settings.login_backoff_base_seconds,
         max_seconds=settings.login_backoff_max_seconds,
+        account_threshold=settings.login_account_lock_threshold,
     )
     # 注册限流直接使用数据库计数（register_attempts），多实例共享，无需进程内状态。
 

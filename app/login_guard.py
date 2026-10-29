@@ -8,7 +8,12 @@ from typing import Optional
 from app.repository import Repository
 
 SCOPE_IP = "ip"
+SCOPE_PAIR = "pair"
 SCOPE_ACCOUNT = "account"
+
+
+def pair_key(ip: str, account: str) -> str:
+    return f"{ip}|{account}"
 
 
 def backoff_seconds(fail_count: int, threshold: int, base_seconds: int, max_seconds: int) -> int:
@@ -41,9 +46,15 @@ class LoginGuard:
         max_seconds: int,
         decay_seconds: int = 86400,
         block_audit_interval_seconds: int = 60,
+        account_threshold: int | None = None,
     ):
         self.repository = repository
         self.threshold = max(1, threshold)
+        # 账号维度阈值更高：单个 IP 的失败无法锁死他人账号（由 pair 维度兜住），
+        # 只有跨多个来源的分布式尝试才会触发账号级退避。
+        self.account_threshold = max(
+            self.threshold + 1, account_threshold or max(self.threshold * 5, 25)
+        )
         self.base_seconds = max(1, base_seconds)
         self.max_seconds = max(self.base_seconds, max_seconds)
         self.decay_seconds = max(1, decay_seconds)
@@ -66,6 +77,7 @@ class LoginGuard:
         now = _now()
         for scope, key, reason in (
             (SCOPE_IP, ip, "backoff_ip"),
+            (SCOPE_PAIR, pair_key(ip, account), "backoff_pair"),
             (SCOPE_ACCOUNT, account, "backoff_account"),
         ):
             state = self._active_state(scope, key, now)
@@ -75,21 +87,28 @@ class LoginGuard:
         return None
 
     def register_failure(self, ip: str, account: str) -> None:
-        """IP 与账号两个维度独立累加；达到阈值后写入退避到期时间。"""
+        """三个维度独立累加：IP、IP+账号组合、账号（高阈值，防定点锁死）。"""
         now = _now()
-        for scope, key in ((SCOPE_IP, ip), (SCOPE_ACCOUNT, account)):
+        for scope, key, threshold in (
+            (SCOPE_IP, ip, self.threshold),
+            (SCOPE_PAIR, pair_key(ip, account), self.threshold),
+            (SCOPE_ACCOUNT, account, self.account_threshold),
+        ):
             state = self._active_state(scope, key, now)
             if state and _parse(state["blocked_until"]) and _parse(state["blocked_until"]) > now:
                 # 退避期间不再累加，避免攻击流量把退避无限拉长。
                 continue
             count = self.repository.increment_login_failure(scope, key)
-            delay = backoff_seconds(count, self.threshold, self.base_seconds, self.max_seconds)
+            delay = backoff_seconds(count, threshold, self.base_seconds, self.max_seconds)
             if delay:
                 until = now + timedelta(seconds=delay)
                 self.repository.set_login_block(scope, key, until.isoformat())
 
-    def clear_account(self, account: str) -> None:
+    def clear_account(self, account: str, ip: str | None = None) -> None:
+        """登录成功后清账号计数，以及该 IP 与该账号的组合计数。"""
         self.repository.clear_login_failures(SCOPE_ACCOUNT, account)
+        if ip:
+            self.repository.clear_login_failures(SCOPE_PAIR, pair_key(ip, account))
 
     def should_audit_block(self, ip: str, account: str) -> bool:
         """退避期内同一 IP+账号的审计最多每 interval 秒一条，避免审计表被刷爆。

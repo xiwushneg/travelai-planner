@@ -20,7 +20,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 浏览器打开 **http://127.0.0.1:8000/**。
 
 - 旅行工作台：`/`
-- Swagger API 调试：`/docs`
+- Swagger API 调试：`/docs`（仅开发环境；`TRAVELAI_ENV=production` 时 `/docs`、`/redoc`、`/openapi.json` 全部关闭）
 - 健康检查：`/health`
 - SQLite 数据：默认保存在 `./data/travelai.db`，重启后行程仍在
 

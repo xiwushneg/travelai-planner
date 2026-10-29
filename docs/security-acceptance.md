@@ -6,7 +6,7 @@
 | 验收对象 | `http://127.0.0.1:8000` 实际运行实例（限流/耗时在隔离实例 8001 + 临时库执行，避免 IP 计数污染） |
 | 验收方式 | 实际 HTTP 请求 + 数据库核对，不只读代码 |
 | 代码基线 | tag `baseline-20261029`（Git 仓库，master 分支） |
-| 自动化测试 | `pytest -q` → 83 passed |
+| 自动化测试 | `pytest -q` → 86 passed |
 | 数据基线 | 用户 1（仅 legacy）、会话 0、行程 25（全部 legacy）、版本 29、运行 47、审计 38 条、三表 NULL 归属 0 |
 | 归属变更 | 2026-10-29 22:37 执行 `--claim-to <管理员账号>`（用户名已脱敏）：trips 25 / versions 29 / runs 47 改判；当前 `legacy` 归属为 0，无 NULL 归属 |
 | 总体结论 | **有条件通过**：9 项验收全部通过；上线前必须完成第 6 节部署前置（TLS + production 配置）与第 5 节中标注为“上线前”的风险处置 |
@@ -74,7 +74,7 @@
 | 密码存储 | bcrypt，默认 cost=12，无明文 | 单元测试 + 代码核对 | 已满足 |
 | 会话 | 32 字节随机 token，库中仅存 SHA-256；Cookie `HttpOnly` + `SameSite=lax` | 验收用例 1 | 已满足（生产需 Secure） |
 | 数据隔离 | `trips`/`trip_versions`/`agent_runs` 均有 `owner_id`；他人资源返回 404 | 验收用例 4、5 | 已满足 |
-| 防爆破 | IP + 账号双维度计数，5 次失败后 30s 起指数退避、30min 封顶；成功登录清账号计数 | 验收用例 2 | 已满足 |
+| 防爆破 | 三维度计数：IP（5 次）、IP+账号组合（5 次）、账号（25 次）；30s 起指数退避、30min 封顶；成功登录清账号与组合计数 | 验收用例 2 + 测试 | 已满足 |
 | 响应一致性 | 失败统一 401 + 同一文案；未知账号也执行一次 dummy bcrypt | 验收用例 3 | 已满足 |
 | 审计 | 6 类事件落库（登录成功/失败/限流、越权、密码重置、批量登出）；用户名哈希；过滤敏感字段；HMAC 哈希链 + 外部锚点 + 留存脚本 | 验收用例 7 + `tests/test_audit_chain.py` | 已满足（防篡改与回滚检测，无告警） |
 | 可恢复性 | `admin_reset_password.py`（精确用户名 + 显式确认 + 一次性密码）重置并吊销全部会话；`POST /auth/logout-all` | 测试 + 验收用例 6 | 已满足 |
@@ -98,6 +98,10 @@
 | R9 | 应用不终止 TLS，依赖外部代理 | 配置错误会导致 Secure Cookie 失效或明文暴露 | **高** | 强制按第 6 节部署并复验 Set-Cookie | 上线前 |
 | R10 | 无版本控制，报告无法绑定 commit | 问题无法追溯、回滚无基线 | 低 | **已解决**：2026-10-29 初始化 Git，以 tag `baseline-20261029` 作为基线 |
 | R11 | 无 MFA、无异常登录告警 | 账号被盗后无实时发现 | 低 | 审计已可用；后续接入告警 | 延后 |
+| R12 | 账号维度锁定可被用于定点 DoS（攻击者故意失败锁死他人账号） | 知道用户名即可反复拒绝服务 | 中 | **已缓解**：新增 IP+账号组合维度（5 次），账号阈值提高到 25 次；单 IP 无法锁死他人账号，分布式尝试才会触发账号退避 | 已处置 |
+| R13 | 生产环境暴露 `/docs`、`/redoc`、`/openapi.json` | 泄露完整接口与参数结构 | 低 | **已解决**：按 `TRAVELAI_ENV` 关闭，开发环境保留；测试守护 | 已处置 |
+| R14 | 容器以 root 运行 | 容器被突破后权限过高 | 中 | **已解决**：镜像内以 uid 10001 的 `appuser` 运行，`/data` 归属该用户 | 已处置 |
+| R15 | 依赖仅写范围、无 CVE 检查 | 构建不可复现、漏洞不可追溯 | 低 | **已解决**：`requirements.txt` 锁定精确版本；`pip-audit -r requirements.txt` 无已知漏洞 | 已处置 |
 
 ## 6. 上线前置检查清单
 
@@ -105,13 +109,16 @@
 - [ ] 反向代理终止 TLS，容器端口不直接暴露公网（模板已绑 `127.0.0.1:8000`，配置参考 `deploy/nginx.conf.example`）
 - [ ] 代理覆写 `X-Forwarded-For` 后才设置 `TRAVELAI_TRUST_PROXY=true`
 - [ ] 登录响应验证 `Set-Cookie` 含 `HttpOnly; Secure; SameSite=lax`，HTTPS 下会话可持久
-- [ ] 代理层补齐 HSTS、CSP、`X-Frame-Options`、`X-Content-Type-Options`
+- [ ] 代理层补齐 HSTS、CSP、`X-Frame-Options`、`X-Content-Type-Options`（模板 `deploy/nginx.conf.example` 已含 CSP 与 Permissions-Policy，按实际域名部署即可）
+- [x] 生产关闭 `/docs`、`/redoc`、`/openapi.json`（`app/main.py` 按 `TRAVELAI_ENV` 判定，容器实测 404）
+- [x] 容器以非 root 运行（uid 10001 `appuser`），`/data` 归属 appuser，`/health` 200
+- [x] 依赖锁定精确版本，`pip-audit -r requirements.txt` → No known vulnerabilities found
 - [ ] 迁移前备份 `data/backups/*.db`，并验证回滚脚本可用
 - [x] 已注册每日清理任务（会话 + 失效登录计数）：`TravelAI-CleanupSessions`，03:30，日志 `logs/cleanup.log`
 - [ ] 审计留存清理：`scripts/audit_retention.py --days 180`，并定期运行 `scripts/verify_audit_chain.py` 校验哈希链与锚点（输出 `anchor=ok`）
 - [ ] 首次上线或审计密钥轮换后，执行 `scripts/verify_audit_chain.py --update-anchor` 建立锚点基线，并把 `<db>.audit-anchor.json` 纳入备份外的独立保管
 - [ ] 审计查询权限收敛（`scripts/audit_query.py` 只读打开）
-- [ ] 复跑 `pytest -q`（当前 83 passed）与 `scripts/http_smoke.py`
+- [ ] 复跑 `pytest -q`（当前 86 passed）与 `scripts/http_smoke.py`
 - [x] 已执行：legacy 数据 claim 至管理员真实账号（用户名已脱敏，2026-10-29），`legacy_trips` 现为 0
 
 ## 7. 复验命令（逐项对应第 6 节清单）
@@ -197,7 +204,7 @@ schtasks /query /tn "TravelAI Session Cleanup"   # Linux 用 crontab -l
 **⑨ 自动化测试与冒烟**
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q          # 期望 83 passed
+.\.venv\Scripts\python.exe -m pytest -q          # 期望 86 passed
 .\.venv\Scripts\python.exe scripts\http_smoke.py
 ```
 

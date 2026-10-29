@@ -63,7 +63,7 @@ def test_five_failures_block_then_expire(tmp_path):
 
     past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
     repository.set_login_block("ip", "testclient", past)
-    repository.set_login_block("account", "alice", past)
+    repository.set_login_block("pair", "testclient|alice", past)
     with TestClient(app) as client:
         assert login(client, "alice").status_code == 200
 
@@ -104,14 +104,29 @@ def test_account_dimension_blocks_across_ips(tmp_path, monkeypatch):
     app = make_app(tmp_path, "account-block.db", monkeypatch=monkeypatch)
     with TestClient(app) as client:
         assert register(client, "carol").status_code == 201
-        for index in range(5):
+        for index in range(25):
             assert login(client, "carol", "wrong-pass-1", ip=f"10.7.0.{index}").status_code == 401
         assert login(client, "carol", ip="10.7.1.1").status_code == 401
 
     repository = app.state.planning_service.repository
-    assert repository.get_login_failure("account", "carol")["fail_count"] == 5
+    assert repository.get_login_failure("account", "carol")["fail_count"] == 25
     assert repository.get_login_failure("ip", "10.7.0.0")["fail_count"] == 1
     assert app.state.login_guard.check("10.7.1.1", "carol")[0] == "backoff_account"
+
+
+def test_attacker_ip_cannot_lock_victim_account(tmp_path, monkeypatch):
+    """单个 IP 的失败只锁 IP 与 IP+账号组合，不会把受害者账号整体锁死。"""
+    app = make_app(tmp_path, "lockout-dos.db", monkeypatch=monkeypatch)
+    with TestClient(app) as client:
+        assert register(client, "carol").status_code == 201
+        for _ in range(5):
+            assert login(client, "carol", "wrong-pass-1", ip="10.11.0.1").status_code == 401
+        assert login(client, "carol", "wrong-pass-1", ip="10.11.0.1").status_code == 401
+        # 受害者换回自己的 IP，正确密码仍可登录
+        assert login(client, "carol", ip="10.11.0.2").status_code == 200
+
+    guard = app.state.login_guard
+    assert guard.check("10.11.0.2", "carol") is None
 
 
 def test_blocked_attempt_still_runs_one_bcrypt(tmp_path, monkeypatch):
@@ -149,6 +164,7 @@ def test_admin_reset_clears_account_backoff(tmp_path):
         )
         assert repository.get_login_failure("account", "bob") is None
 
-        # 换一个出口 IP 模拟异地登录；IP 维度退避按设计保留，不在本用例范围。
+        # 换一个出口 IP 模拟异地登录；IP 与 IP+账号组合的退避按设计保留，不在本用例范围。
         repository.clear_login_failures("ip", "testclient")
+        repository.clear_login_failures("pair", "testclient|bob")
         assert login(client, "bob", "new-password-9").status_code == 200
