@@ -6,9 +6,9 @@
 | 验收对象 | `http://127.0.0.1:8000` 实际运行实例（限流/耗时在隔离实例 8001 + 临时库执行，避免 IP 计数污染） |
 | 验收方式 | 实际 HTTP 请求 + 数据库核对，不只读代码 |
 | 代码基线 | tag `baseline-20261029`（Git 仓库，master 分支） |
-| 自动化测试 | `pytest -q` → 71 passed |
+| 自动化测试 | `pytest -q` → 83 passed |
 | 数据基线 | 用户 1（仅 legacy）、会话 0、行程 25（全部 legacy）、版本 29、运行 47、审计 38 条、三表 NULL 归属 0 |
-| 归属变更 | 2026-10-29 22:37 执行 `--claim-to duanjiabao118`：trips 25 / versions 29 / runs 47 改判；当前 `legacy` 归属为 0，无 NULL 归属 |
+| 归属变更 | 2026-10-29 22:37 执行 `--claim-to <管理员账号>`（用户名已脱敏）：trips 25 / versions 29 / runs 47 改判；当前 `legacy` 归属为 0，无 NULL 归属 |
 | 总体结论 | **有条件通过**：9 项验收全部通过；上线前必须完成第 6 节部署前置（TLS + production 配置）与第 5 节中标注为“上线前”的风险处置 |
 
 ## 1. 验收结果
@@ -112,7 +112,7 @@
 - [ ] 首次上线或审计密钥轮换后，执行 `scripts/verify_audit_chain.py --update-anchor` 建立锚点基线，并把 `<db>.audit-anchor.json` 纳入备份外的独立保管
 - [ ] 审计查询权限收敛（`scripts/audit_query.py` 只读打开）
 - [ ] 复跑 `pytest -q`（当前 83 passed）与 `scripts/http_smoke.py`
-- [x] 已执行：legacy 数据 claim 至 `duanjiabao118`（2026-10-29，备份 `data/backups/travelai-20261029-223729.db`），`legacy_trips` 现为 0
+- [x] 已执行：legacy 数据 claim 至管理员真实账号（用户名已脱敏，2026-10-29），`legacy_trips` 现为 0
 
 ## 7. 复验命令（逐项对应第 6 节清单）
 
