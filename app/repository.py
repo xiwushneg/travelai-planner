@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -83,6 +84,11 @@ class Repository:
                 PRIMARY KEY(scope, key)
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+            CREATE TABLE IF NOT EXISTS register_attempts (
+                key TEXT PRIMARY KEY,
+                window_start TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS audit_events (
                 id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
@@ -90,7 +96,9 @@ class Repository:
                 event_type TEXT NOT NULL,
                 ip TEXT,
                 result TEXT NOT NULL,
-                detail TEXT
+                detail TEXT,
+                prev_hash TEXT,
+                entry_hash TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at);
             CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_events(actor_key, created_at);
@@ -143,6 +151,7 @@ class Repository:
                 (LEGACY_USER_ID, LEGACY_USERNAME, DISABLED_PASSWORD_HASH, utcnow()),
             )
             self._ensure_owner_columns(conn)
+            self._ensure_audit_columns(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_trips_owner ON trips(owner_id, updated_at DESC)"
             )
@@ -152,6 +161,14 @@ class Repository:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_versions_owner ON trip_versions(owner_id)"
             )
+
+    @staticmethod
+    def _ensure_audit_columns(conn: sqlite3.Connection):
+        """旧库增量补齐审计哈希列；新库建表时已包含。"""
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_events)")}
+        for column in ("prev_hash", "entry_hash"):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE audit_events ADD COLUMN {column} TEXT")
 
     @staticmethod
     def _ensure_owner_columns(conn: sqlite3.Connection):
@@ -261,6 +278,44 @@ class Repository:
                 conn.rollback()
                 raise
         return user_id, revoked
+
+    def register_attempt(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
+        """注册尝试计数落库，多实例共享；返回 (是否允许, 建议等待秒数)。
+
+        固定窗口：窗口内成功与失败都计数，避免注册接口被用来探测账号。
+        """
+        now = datetime.now(timezone.utc)
+        window = max(1, int(window_seconds))
+        limit = max(1, int(limit))
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT window_start,count FROM register_attempts WHERE key=?", (key,)
+                ).fetchone()
+                elapsed = None
+                if row is not None:
+                    started = datetime.fromisoformat(row["window_start"])
+                    elapsed = (now - started).total_seconds()
+                if row is None or elapsed is None or elapsed >= window:
+                    conn.execute(
+                        "INSERT INTO register_attempts(key,window_start,count) VALUES(?,?,1) "
+                        "ON CONFLICT(key) DO UPDATE SET window_start=excluded.window_start,count=1",
+                        (key, now.isoformat()),
+                    )
+                    conn.commit()
+                    return True, 0
+                count = row["count"] + 1
+                conn.execute(
+                    "UPDATE register_attempts SET count=? WHERE key=?", (count, key)
+                )
+                conn.commit()
+                if count > limit:
+                    return False, max(1, math.ceil(window - elapsed))
+                return True, 0
+            except Exception:
+                conn.rollback()
+                raise
 
     def delete_expired_sessions(self) -> int:
         with self.connect() as conn:
@@ -599,17 +654,61 @@ class Repository:
         self, event_type: str, actor_key: Optional[str], ip: Optional[str],
         result: str, detail: Optional[dict] = None,
     ) -> str:
+        """写入审计并串接哈希链；与读取上一条哈希在同一事务内完成，避免分叉。"""
+        from app.audit import GENESIS, chain_hash, digest_fields
+
         event_id = f"audit-{uuid4().hex}"
+        created_at = utcnow()
+        detail_json = json.dumps(detail, ensure_ascii=False, default=str) if detail else None
         with self.connect() as conn:
-            conn.execute(
-                "INSERT INTO audit_events(id,created_at,actor_key,event_type,ip,result,detail) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (
-                    event_id, utcnow(), actor_key, event_type, ip, result,
-                    json.dumps(detail, ensure_ascii=False, default=str) if detail else None,
-                ),
-            )
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT entry_hash FROM audit_events WHERE entry_hash IS NOT NULL "
+                    "ORDER BY created_at DESC, rowid DESC LIMIT 1"
+                ).fetchone()
+                prev_hash = row["entry_hash"] if row else GENESIS
+                entry_hash = chain_hash(
+                    prev_hash,
+                    digest_fields(event_id, created_at, actor_key, event_type, ip, result, detail_json),
+                )
+                conn.execute(
+                    "INSERT INTO audit_events(id,created_at,actor_key,event_type,ip,result,detail,"
+                    "prev_hash,entry_hash) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        event_id, created_at, actor_key, event_type, ip, result,
+                        detail_json, prev_hash, entry_hash,
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         return event_id
+
+    def audit_chain_rows(self) -> list[dict]:
+        """按写入顺序返回审计全量，供哈希链校验与留存清理使用。"""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id,created_at,actor_key,event_type,ip,result,detail,prev_hash,entry_hash "
+                "FROM audit_events ORDER BY created_at ASC, rowid ASC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_audit_events_before(self, cutoff: str) -> int:
+        with self.connect() as conn:
+            cursor = conn.execute("DELETE FROM audit_events WHERE created_at<?", (cutoff,))
+        return cursor.rowcount
+
+    def count_audit_events_before(self, cutoff: str) -> int:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT count(*) FROM audit_events WHERE created_at<?", (cutoff,)
+            ).fetchone()[0]
+
+    def count_audit_events(self) -> int:
+        with self.connect() as conn:
+            return conn.execute("SELECT count(*) FROM audit_events").fetchone()[0]
 
     def list_audit_events(
         self, limit: int = 50, event_type: Optional[str] = None,

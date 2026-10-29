@@ -14,7 +14,6 @@ from app.config import settings, validate_settings
 from app.data.seed import DEMO_GUIDES, DEMO_SPOTS
 from app.rag.local import LocalLexicalRetriever
 from app.login_guard import LoginGuard
-from app.ratelimit import SlidingWindowLimiter
 from app.repository import NotFoundError, Repository, VersionConflictError
 from app.service import ModificationError, PlanningService
 
@@ -45,9 +44,7 @@ def create_app(db_path: str | None = None, web_dist: str | None = None) -> FastA
         base_seconds=settings.login_backoff_base_seconds,
         max_seconds=settings.login_backoff_max_seconds,
     )
-    app.state.register_limiter = SlidingWindowLimiter(
-        settings.register_max_attempts, settings.register_window_seconds
-    )
+    # 注册限流直接使用数据库计数（register_attempts），多实例共享，无需进程内状态。
 
     @app.exception_handler(NotFoundError)
     async def not_found(_: Request, exc: NotFoundError):

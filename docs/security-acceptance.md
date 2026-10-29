@@ -88,8 +88,8 @@
 | ID | 风险 | 影响 | 等级 | 处置建议 | 时点 |
 |---|---|---|---|---|---|
 | R1 | CSRF 防护依赖“同源 + JSON-only + SameSite=lax + 无 CORS” | 条件被打破后跨站写请求可利用 | 中 | 触发 5 个条件任一时先升级双提交 Cookie/完整 token；现有守护测试会拦截代码侧变更 | 持续 |
-| R2 | 注册限流仅在进程内存 | 多实例部署可绕过 | 中 | 迁到共享存储或网关/WAF 限流 | 上线前（若多实例） |
-| R3 | 审计表无防篡改、无留存策略 | 有库权限即可删改；长期膨胀 | 中 | 哈希链或只追加日志；定期归档 | 延后 |
+| R2 | 注册限流仅在进程内存 | 多实例部署可绕过 | 中 | **已解决**：2026-10-29 改为 `register_attempts` 落 SQLite，多实例共享计数 | 已处置 |
+| R3 | 审计表无防篡改、无留存策略 | 有库权限即可删改；长期膨胀 | 中 | **已缓解**：HMAC 哈希链 + `verify_audit_chain.py` 校验 + `audit_retention.py` 留存清理；整库回滚到旧备份仍可绕过，需配合备份权限收敛 | 已处置 |
 | R4 | 无自助改密/找回 | 用户只能找管理员 | 中 | 已有管理员 CLI 兜底；邮箱/短信找回明确不做 | 接受 |
 | R5 | 管理员重置脚本仅依赖服务器权限，无二次审批 | 内部人员可重置任意账号 | 中 | 重置事件已审计；限制服务器登录与脚本权限 | 上线前（权限收敛） |
 | R6 | SQLite 单文件，多实例写竞争 | 高并发下写入排队/超时 | 中 | 单写实例或迁移 Postgres | 延后 |
@@ -107,9 +107,10 @@
 - [ ] 登录响应验证 `Set-Cookie` 含 `HttpOnly; Secure; SameSite=lax`，HTTPS 下会话可持久
 - [ ] 代理层补齐 HSTS、CSP、`X-Frame-Options`、`X-Content-Type-Options`
 - [ ] 迁移前备份 `data/backups/*.db`，并验证回滚脚本可用
-- [ ] 注册每日清理计划任务（`scripts/register_cleanup_task.ps1`，日志 `logs/cleanup.log`）
+- [x] 已注册每日清理任务（会话 + 失效登录计数）：`TravelAI-CleanupSessions`，03:30，日志 `logs/cleanup.log`
+- [ ] 审计留存清理：`scripts/audit_retention.py --days 180`，并定期运行 `scripts/verify_audit_chain.py` 校验哈希链
 - [ ] 审计查询权限收敛（`scripts/audit_query.py` 只读打开）
-- [ ] 复跑 `pytest -q`（当前 71 passed）与 `scripts/http_smoke.py`
+- [ ] 复跑 `pytest -q`（当前 77 passed）与 `scripts/http_smoke.py`
 - [x] 已执行：legacy 数据 claim 至 `duanjiabao118`（2026-10-29，备份 `data/backups/travelai-20261029-223729.db`），`legacy_trips` 现为 0
 
 ## 7. 复验命令（逐项对应第 6 节清单）

@@ -172,3 +172,53 @@ def test_trust_proxy_header_is_opt_in(tmp_path, monkeypatch):
         )
     trusted_repository = trusted_app.state.planning_service.repository
     assert trusted_repository.get_login_failure("ip", "10.1.0.1")["fail_count"] == 1
+
+
+def test_register_limit_shared_across_instances(tmp_path):
+    """计数落在 SQLite，第二个应用实例同样受限，证明跨进程共享。"""
+    db_path = str(tmp_path / "shared-register.db")
+    first_app = create_app(db_path)
+    with TestClient(first_app) as client:
+        for index in range(3):
+            assert client.post(
+                "/api/v1/auth/register",
+                json={"username": f"shared-{index}", "password": PASSWORD},
+            ).status_code == 201
+
+    second_app = create_app(db_path)
+    with TestClient(second_app) as client:
+        blocked = client.post(
+            "/api/v1/auth/register",
+            json={"username": "shared-final", "password": PASSWORD},
+        )
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "RATE_LIMITED"
+    assert int(blocked.headers["retry-after"]) >= 1
+    second_repository = second_app.state.planning_service.repository
+    assert second_repository.register_attempt("testclient", 3, 600)[1] >= 1
+
+
+def test_register_window_resets_after_expiry(tmp_path):
+    app = create_app(str(tmp_path / "window.db"))
+    repository = app.state.planning_service.repository
+    with TestClient(app) as client:
+        for index in range(3):
+            assert client.post(
+                "/api/v1/auth/register",
+                json={"username": f"window-{index}", "password": PASSWORD},
+            ).status_code == 201
+        assert client.post(
+            "/api/v1/auth/register",
+            json={"username": "window-4", "password": PASSWORD},
+        ).status_code == 429
+
+    with repository.connect() as conn:
+        conn.execute("UPDATE register_attempts SET window_start=?", ("2020-01-01T00:00:00+00:00",))
+
+    with TestClient(app) as client:
+        allowed = client.post(
+            "/api/v1/auth/register",
+            json={"username": "window-5", "password": PASSWORD},
+        )
+    assert allowed.status_code == 201
+

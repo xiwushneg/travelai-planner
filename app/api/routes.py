@@ -186,11 +186,11 @@ def health(request: Request):
 def register(payload: AuthRequest, request: Request, response: Response):
     repository = service(request).repository
     ip = client_ip(request)
-    retry_after = request.app.state.register_limiter.retry_after(ip)
-    if retry_after:
+    allowed, retry_after = repository.register_attempt(
+        ip, settings.register_max_attempts, settings.register_window_seconds
+    )
+    if not allowed:
         raise rate_limited(retry_after)
-    # 注册尝试（含失败与重名）统一计数，避免被用来探测账号。
-    request.app.state.register_limiter.record(ip)
     try:
         password_hash = hash_password(payload.password)
     except PasswordPolicyError as exc:

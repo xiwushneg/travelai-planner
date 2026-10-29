@@ -31,7 +31,14 @@ DDL = [
         event_type TEXT NOT NULL,
         ip TEXT,
         result TEXT NOT NULL,
-        detail TEXT
+        detail TEXT,
+        prev_hash TEXT,
+        entry_hash TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS register_attempts (
+        key TEXT PRIMARY KEY,
+        window_start TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0
     )""",
     "CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at)",
     "CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_events(actor_key, created_at)",
@@ -41,6 +48,7 @@ ROLLBACK = [
     "DROP INDEX IF EXISTS idx_audit_actor",
     "DROP INDEX IF EXISTS idx_audit_created",
     "DROP TABLE IF EXISTS audit_events",
+    "DROP TABLE IF EXISTS register_attempts",
     "DROP INDEX IF EXISTS idx_sessions_user",
 ]
 
