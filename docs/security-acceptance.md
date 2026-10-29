@@ -192,7 +192,7 @@ schtasks /query /tn "TravelAI Session Cleanup"   # Linux 用 crontab -l
 **⑨ 自动化测试与冒烟**
 
 ```powershell
-\.\.venv\Scripts\python.exe -m pytest -q          # 期望 70 passed
+\.\.venv\Scripts\python.exe -m pytest -q          # 期望 71 passed
 .\.venv\Scripts\python.exe scripts\http_smoke.py
 ```
 
