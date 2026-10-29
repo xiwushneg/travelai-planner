@@ -1,0 +1,44 @@
+{
+  "health": {
+    "status": "ok",
+    "planner": "deterministic",
+    "evidence_mode": "local_lexical",
+    "map_provider": "local",
+    "map_mode": "local_estimate",
+    "realtime_weather": false,
+    "realtime_traffic": false
+  },
+  "home_status": 200,
+  "asset_status": {
+    "/assets/index-BPgcnjg2.css": 200,
+    "/assets/index-Do2Lf7iT.js": 200
+  },
+  "spots_count": 8,
+  "initial_recent_status": 200,
+  "create_status": 201,
+  "trip_id": "trip-450150d9603b417aa6c4927f215fa111",
+  "initial_evidence_count": 3,
+  "recent_status": 200,
+  "recent_trips_version": 1,
+  "modify_status": 200,
+  "modify_version": 2,
+  "unchanged_days": [
+    1
+  ],
+  "diff_status": 200,
+  "versions": [
+    1,
+    2
+  ],
+  "historical_status": 200,
+  "historical_version": 1,
+  "stale_modification_status": 409,
+  "stale_current_version": 2,
+  "infeasible_status": 422,
+  "infeasible_code": "PLANNING_INFEASIBLE",
+  "infeasible_conflicts": [
+    "no_feasible_schedule_found"
+  ],
+  "spa_fallback_status": 200,
+  "unknown_api_status": 404
+}

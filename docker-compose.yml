@@ -1,0 +1,28 @@
+services:
+  app:
+    build: .
+    ports:
+      # 仅绑定本机，由反向代理（Nginx/Caddy 等）终止 TLS；不要直接暴露到公网。
+      - "127.0.0.1:8000:8000"
+    environment:
+      # 生产模板默认值：ENV=production 且 Cookie 必须 Secure；本地 HTTP 运行请覆盖为 development。
+      # 容器本身只提供 HTTP，HTTPS 必须在反向代理层完成，否则浏览器不会保存 Secure Cookie。
+      TRAVELAI_ENV: ${TRAVELAI_ENV:-production}
+      TRAVELAI_COOKIE_SECURE: ${TRAVELAI_COOKIE_SECURE:-true}
+      TRAVELAI_TRUST_PROXY: ${TRAVELAI_TRUST_PROXY:-false}
+      # 必填：至少 16 位随机串；留空或使用默认值时 production 启动自检会拒绝启动。
+      TRAVELAI_AUDIT_KEY: ${TRAVELAI_AUDIT_KEY:-}
+      TRAVELAI_DB_PATH: /data/travelai.db
+      TRAVELAI_SEED_DEMO: ${TRAVELAI_SEED_DEMO:-true}
+      TRAVELAI_EVIDENCE: ${TRAVELAI_EVIDENCE:-true}
+      TRAVELAI_MAP_PROVIDER: ${TRAVELAI_MAP_PROVIDER:-local}
+      BAIDU_MAP_AK: ${BAIDU_MAP_AK:-}
+      BAIDU_ROUTE_MODE: ${BAIDU_ROUTE_MODE:-walking}
+      TRAVELAI_MAP_TIMEOUT_SECONDS: ${TRAVELAI_MAP_TIMEOUT_SECONDS:-4}
+      TRAVELAI_MAP_MAX_CALLS_PER_PLAN: ${TRAVELAI_MAP_MAX_CALLS_PER_PLAN:-40}
+    volumes:
+      - travelai-data:/data
+    restart: unless-stopped
+
+volumes:
+  travelai-data:

@@ -1,0 +1,37 @@
+# TravelAI 反向代理样例。域名、证书路径按实际环境替换。
+# 应用只监听 127.0.0.1:8000，TLS 在此终止；容器无需暴露公网端口。
+
+server {
+    listen 80;
+    server_name travelai.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name travelai.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/travelai.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/travelai.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "same-origin" always;
+
+    # 写接口均为 JSON，限制请求体大小即可，不需要放开上传。
+    client_max_body_size 1m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # 覆写而非追加，避免客户端自带 X-Forwarded-For 伪造来源 IP。
+        # 仅在此前提下才可设置 TRAVELAI_TRUST_PROXY=true。
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+}

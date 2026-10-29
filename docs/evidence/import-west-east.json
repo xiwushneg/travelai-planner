@@ -1,0 +1,14 @@
+{
+  "kind": "spots",
+  "source": "data\\imports\\spots-west-east.jsonl",
+  "database": "data\\travelai.db",
+  "dry_run": false,
+  "committed": true,
+  "total_records": 30,
+  "valid_records": 30,
+  "rejected_records": 0,
+  "inserted": 30,
+  "updated": 0,
+  "unchanged": 0,
+  "errors": []
+}

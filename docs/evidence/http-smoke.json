@@ -1,0 +1,23 @@
+{
+  "health": {
+    "status": "ok",
+    "planner": "deterministic",
+    "evidence_mode": "local_lexical",
+    "realtime_weather": false,
+    "realtime_traffic": false
+  },
+  "create_status": 201,
+  "trip_id": "trip-1ea97b12e1de4a689672afd8e3ce3bc8",
+  "modify_version": 2,
+  "unchanged_days": [
+    1
+  ],
+  "stale_modification_status": 409,
+  "versions": [
+    1,
+    2
+  ],
+  "infeasible_status": 422,
+  "infeasible_conflict": "no_feasible_schedule_found",
+  "openapi_paths": 9
+}

@@ -1,0 +1,8 @@
+{
+  "archive_entries": 35,
+  "archive_bytes": 41336,
+  "zip_integrity": "passed",
+  "forbidden_artifacts": "none",
+  "extracted_tests": "13 passed",
+  "extracted_demo": "v1 -> v2 succeeded"
+}

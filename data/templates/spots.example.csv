@@ -1,0 +1,2 @@
+id,name,city,category,latitude,longitude,address,rating,visit_duration_minutes,tags,adult_ticket_cny,child_ticket_cny,senior_ticket_cny,opening,source.status,source.name,source.url,source.last_verified_at,source.notes
+example-city-central-park,示例城中央公园（虚构）,示例城,park,39.9042,116.4074,示例地址非真实出行信息,4.5,120,公园|示范数据,0,0,0,"{""open_time"":""08:00"",""close_time"":""18:00"",""closed_weekdays"":[],""closed_dates"":[]}",unverified,导入模板虚构示例,,,仅用于验证导入流程不是实际旅行信息

@@ -1,0 +1,2 @@
+id,title,city,tags,content,source.status,source.name,source.url,source.last_verified_at,source.notes
+example-city-guide,示例城旅行攻略（虚构）,示例城,示范数据,这是用于验证导入流程的虚构攻略不是实际旅行建议,unverified,导入模板虚构示例,,,仅用于验证导入流程

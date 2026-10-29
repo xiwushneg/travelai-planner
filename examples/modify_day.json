@@ -1,0 +1,9 @@
+{
+  "expected_version": 1,
+  "day_number": 2,
+  "desired_spot_ids": [
+    "tokyo-shibuya-sky"
+  ],
+  "lock_other_days": true,
+  "include_evidence": true
+}

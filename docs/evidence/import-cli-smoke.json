@@ -1,0 +1,82 @@
+{
+  "cases": [
+    {
+      "kind": "spots",
+      "format": "jsonl",
+      "dry_run_valid": 1,
+      "dry_run_created_database": false,
+      "dry_run_status_message": "预检通过：未创建或修改数据库。",
+      "first_import": {
+        "inserted": 1,
+        "updated": 0,
+        "unchanged": 0
+      },
+      "repeat_import": {
+        "inserted": 0,
+        "updated": 0,
+        "unchanged": 1
+      },
+      "report_file_verified": true
+    },
+    {
+      "kind": "spots",
+      "format": "csv",
+      "dry_run_valid": 1,
+      "dry_run_created_database": false,
+      "dry_run_status_message": "预检通过：未创建或修改数据库。",
+      "first_import": {
+        "inserted": 1,
+        "updated": 0,
+        "unchanged": 0
+      },
+      "repeat_import": {
+        "inserted": 0,
+        "updated": 0,
+        "unchanged": 1
+      },
+      "report_file_verified": true
+    },
+    {
+      "kind": "guides",
+      "format": "jsonl",
+      "dry_run_valid": 1,
+      "dry_run_created_database": false,
+      "dry_run_status_message": "预检通过：未创建或修改数据库。",
+      "first_import": {
+        "inserted": 1,
+        "updated": 0,
+        "unchanged": 0
+      },
+      "repeat_import": {
+        "inserted": 0,
+        "updated": 0,
+        "unchanged": 1
+      },
+      "report_file_verified": true
+    },
+    {
+      "kind": "guides",
+      "format": "csv",
+      "dry_run_valid": 1,
+      "dry_run_created_database": false,
+      "dry_run_status_message": "预检通过：未创建或修改数据库。",
+      "first_import": {
+        "inserted": 1,
+        "updated": 0,
+        "unchanged": 0
+      },
+      "repeat_import": {
+        "inserted": 0,
+        "updated": 0,
+        "unchanged": 1
+      },
+      "report_file_verified": true
+    }
+  ],
+  "invalid_file": {
+    "exit_code": 2,
+    "line": 2,
+    "rejected_records": 2,
+    "database_created": false
+  }
+}

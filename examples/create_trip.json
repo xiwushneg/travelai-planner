@@ -1,0 +1,31 @@
+{
+  "spec": {
+    "destination": "东京",
+    "start_date": "2027-04-01",
+    "end_date": "2027-04-02",
+    "party": {
+      "adults": 2,
+      "children": 0,
+      "seniors": 0
+    },
+    "selected_spot_ids": [
+      "tokyo-sensoji",
+      "tokyo-ueno-park",
+      "tokyo-national-museum",
+      "tokyo-meiji-jingu"
+    ],
+    "must_include_spot_ids": [
+      "tokyo-sensoji",
+      "tokyo-ueno-park"
+    ],
+    "max_spots_per_day": 2,
+    "include_lunch": false,
+    "transport": {
+      "mode": "drive",
+      "average_speed_kmh": 24,
+      "buffer_minutes": 15,
+      "cost_per_km_cny": 0
+    }
+  },
+  "include_evidence": true
+}

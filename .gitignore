@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+frontend/node_modules/
+npm-debug.log*
+data/*.db
+data/*.db-*
+data/backups/
+logs/
+demo-output.json
