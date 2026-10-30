@@ -109,6 +109,7 @@
 - [ ] 反向代理终止 TLS，容器端口不直接暴露公网（模板已绑 `127.0.0.1:8000`，配置参考 `deploy/nginx.conf.example`）
 - [ ] 代理覆写 `X-Forwarded-For` 后才设置 `TRAVELAI_TRUST_PROXY=true`
 - [ ] 登录响应验证 `Set-Cookie` 含 `HttpOnly; Secure; SameSite=lax`，HTTPS 下会话可持久
+- [ ] 按 `docs/nginx-deployment-checklist.md` 逐项核对：TLS、安全响应头、XFF 覆写、Cookie 属性、请求体限制、日志与备份任务
 - [ ] 代理层补齐 HSTS、CSP、`X-Frame-Options`、`X-Content-Type-Options`（模板 `deploy/nginx.conf.example` 已含 CSP 与 Permissions-Policy，按实际域名部署即可）
 - [x] 生产关闭 `/docs`、`/redoc`、`/openapi.json`（`app/main.py` 按 `TRAVELAI_ENV` 判定，容器实测 404）
 - [x] 容器以非 root 运行（uid 10001 `appuser`），`/data` 归属 appuser，`/health` 200
