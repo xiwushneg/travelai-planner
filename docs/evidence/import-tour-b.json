@@ -1,0 +1,14 @@
+{
+  "kind": "spots",
+  "source": "data\\imports\\spots-tour-b.jsonl",
+  "database": "data\\travelai.db",
+  "dry_run": false,
+  "committed": true,
+  "total_records": 25,
+  "valid_records": 25,
+  "rejected_records": 0,
+  "inserted": 25,
+  "updated": 0,
+  "unchanged": 0,
+  "errors": []
+}
