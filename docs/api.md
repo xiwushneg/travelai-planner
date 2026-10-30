@@ -12,7 +12,7 @@
 | GET | 非 API 前端路径 | SPA fallback 到首页 |
 | GET | 未知 `/api/*` | JSON 404，不返回前端 HTML |
 
-`realtime_weather` 与 `realtime_traffic` 当前固定为 `false`。`/health` 另返回非敏感的 `map_provider` 和 `map_mode`：默认本地模式分别为 `local` 和 `local_estimate`；缺 AK 回退时 `map_mode` 为 `local_fallback_baidu_ak_missing`。响应不会返回 AK。百度 DirectionLite 的一次路线响应也不表示实时路况。
+`realtime_traffic` 固定为 `false`；`realtime_weather` 取决于 `TRAVELAI_WEATHER`，接入 Open-Meteo 预报时为 `true`。`/health` 另返回非敏感的 `llm_mode`（`deepseek`/`rules`）、`weather_mode`（`open_meteo`/`disabled`）、`agent_chat`、`map_provider` 和 `map_mode`：默认本地模式分别为 `local` 和 `local_estimate`；缺 AK 回退时 `map_mode` 为 `local_fallback_baidu_ak_missing`。响应不会返回 AK 或任何密钥。百度 DirectionLite 的一次路线响应也不表示实时路况。
 
 ## 基础数据与最近行程
 
@@ -103,6 +103,52 @@ diff 包含 `added`、`removed`、`moved`、`rescheduled` 和 `unchanged_days`�
 
 - `GET /api/v1/runs/{run_id}`：请求、状态、错误、结果、行程与时间；当前 API 同步执行。
 - `POST /api/v1/evidence/search`：`city/query/top_k`，返回城市硬过滤的本地词法检索结果；`top_k` 为 1–10。
+
+## AI 对话
+
+全部接口需登录，历史按账号隔离。
+
+### `POST /api/v1/agent/chat`
+
+```json
+{ "message": "帮我规划上海3天行程，2026-11-02出发，2个大人" }
+```
+
+`message` 去除首尾空白后长度为 1–2000，否则 `422`。响应：
+
+```json
+{
+  "message": {
+    "role": "assistant",
+    "content": "已在上海生成 3 天行程（v1）…",
+    "intent": "plan_trip",
+    "cards": [{ "type": "plan", "trip_id": "trip-…", "version": 1, "days": [...] }],
+    "quick_replies": ["帮我规划东京3天行程", "..."],
+    "trip_id": "trip-…"
+  },
+  "intent": "plan_trip",
+  "intent_label": "规划行程",
+  "trip_id": "trip-…",
+  "version": 1,
+  "llm_mode": "rules"
+}
+```
+
+意图：`plan_trip`、`weather_query`、`hotel_search`、`flight_query`、`ticket_query`、`guide_query`、`general_chat`。
+
+- 事实型回答由确定性工具产出，以 `cards` 返回：`weather`、`hotels`、`tickets`、`flight`、`evidence`、`spots`、`plan`、`plan_conflict`、`capabilities`、`clarify`、`notice`。
+- 天气来自 Open-Meteo 免费预报，仅约 16 天窗口；超出窗口、历史日期或请求失败时 `status=unavailable` 并给出原因，不编造。
+- 住宿为按城市档次与房型生成的演示价位（`status=demo`），机票返回 `status=unavailable` 并只给建议，均不代表实时库存或价格。
+- `plan` 卡的 `trip_id` 可直接用于 `GET /api/v1/trips/{trip_id}`；`plan_conflict` 表示约束不可行并附带冲突项。
+- 未配置 `DEEPSEEK_API_KEY` 时 `llm_mode=rules`，使用规则意图解析与模板回复。
+
+### `GET /api/v1/agent/history?limit=100`
+
+返回最近 `limit` 条消息（时间正序），`limit` 为 1–200，默认 `TRAVELAI_CHAT_HISTORY_LIMIT`。
+
+### `DELETE /api/v1/agent/history`
+
+清空当前账号的对话历史，返回 `{"status": "ok", "deleted": n}`。
 
 ## 错误约定
 

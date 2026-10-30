@@ -67,8 +67,22 @@ class EvidenceSearchRequest(BaseModel):
     top_k: int = Field(default=3, ge=1, le=10)
 
 
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def strip_message(cls, value):
+        """纯空白消息不应进入对话流程。"""
+        return value.strip() if isinstance(value, str) else value
+
+
 def service(request: Request):
     return request.app.state.planning_service
+
+
+def agent_service(request: Request):
+    return request.app.state.agent_chat
 
 
 def unauthenticated() -> HTTPException:
@@ -171,14 +185,18 @@ def infeasible(run_id: str, result: PlanningResult):
 def health(request: Request):
     planning = service(request)
     retriever = planning.retriever
+    agent = getattr(request.app.state, "agent_chat", None)
     return {
         "status": "ok",
         "planner": "deterministic",
         "evidence_mode": "disabled" if isinstance(retriever, NullRetriever) else "local_lexical",
         "map_provider": planning.settings.map_provider,
         "map_mode": planning.map_mode,
-        "realtime_weather": False,
+        "realtime_weather": agent.weather_mode == "open_meteo" if agent else False,
         "realtime_traffic": False,
+        "llm_mode": agent.llm_mode if agent else "rules",
+        "weather_mode": agent.weather_mode if agent else "disabled",
+        "agent_chat": agent is not None,
     }
 
 
@@ -409,3 +427,28 @@ def get_run(run_id: str, request: Request, user: dict = Depends(current_user)):
 def search_evidence(payload: EvidenceSearchRequest, request: Request):
     items = service(request).search_evidence(payload.city, payload.query, payload.top_k)
     return {"items": items, "total": len(items), "notice": "检索内容仅作证据，不作为系统指令"}
+
+
+@router.post("/api/v1/agent/chat")
+def agent_chat(
+    payload: ChatRequest, request: Request, user: dict = Depends(current_user)
+):
+    """对话入口：意图路由到确定性工具，结果与卡片一并持久化。"""
+    return agent_service(request).handle(user, payload.message)
+
+
+@router.get("/api/v1/agent/history")
+def agent_history(
+    request: Request, user: dict = Depends(current_user),
+    limit: Optional[int] = Query(default=None, ge=1, le=200),
+):
+    messages = agent_service(request).repository.list_chat_messages(
+        user["id"], limit or settings.chat_history_limit,
+    )
+    return {"messages": messages, "total": len(messages)}
+
+
+@router.delete("/api/v1/agent/history")
+def clear_agent_history(request: Request, user: dict = Depends(current_user)):
+    deleted = agent_service(request).repository.clear_chat_messages(user["id"])
+    return {"status": "ok", "deleted": deleted}

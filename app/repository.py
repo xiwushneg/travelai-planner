@@ -144,6 +144,15 @@ class Repository:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                intent TEXT,
+                payload TEXT,
+                created_at TEXT NOT NULL
+            );
             """)
             conn.execute(
                 "INSERT OR IGNORE INTO users(id,username,password_hash,is_active,created_at) "
@@ -160,6 +169,9 @@ class Repository:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_versions_owner ON trip_versions(owner_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_owner ON chat_messages(owner_id, created_at)"
             )
 
     @staticmethod
@@ -804,3 +816,61 @@ class Repository:
             item["detail"] = json.loads(item["detail"]) if item["detail"] else None
             events.append(item)
         return events
+
+    def list_cities(self) -> list[str]:
+        """景点库中实际可规划的城市，供对话意图识别与可用城市提示。"""
+        with self.connect() as conn:
+            rows = conn.execute("SELECT DISTINCT city FROM spots ORDER BY city").fetchall()
+        return [row["city"] for row in rows]
+
+    def add_chat_message(
+        self, owner_id: str, role: str, content: str, *,
+        intent: Optional[str] = None, payload: Optional[dict] = None,
+    ) -> dict:
+        """对话消息按 owner_id 归属持久化；payload 保存结构化卡片等附加信息。"""
+        message_id = f"chat-{uuid4().hex}"
+        created_at = utcnow()
+        payload = payload or {}
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO chat_messages(id,owner_id,role,content,intent,payload,created_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (
+                    message_id, owner_id, role, content, intent,
+                    json.dumps(payload, ensure_ascii=False, default=str),
+                    created_at,
+                ),
+            )
+        return {
+            "id": message_id, "role": role, "content": content, "intent": intent,
+            "cards": payload.get("cards", []),
+            "quick_replies": payload.get("quick_replies", []),
+            "trip_id": payload.get("trip_id"),
+            "created_at": created_at,
+        }
+
+    def list_chat_messages(self, owner_id: str, limit: int = 50) -> list[dict]:
+        """返回最近 limit 条消息（按时间正序），前端直接渲染。"""
+        limit = max(1, min(int(limit), 200))
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id,role,content,intent,payload,created_at FROM chat_messages "
+                "WHERE owner_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (owner_id, limit),
+            ).fetchall()
+        messages = []
+        for row in reversed(rows):
+            payload = json.loads(row["payload"]) if row["payload"] else {}
+            messages.append({
+                "id": row["id"], "role": row["role"], "content": row["content"],
+                "intent": row["intent"], "cards": payload.get("cards", []),
+                "quick_replies": payload.get("quick_replies", []),
+                "trip_id": payload.get("trip_id"), "city": payload.get("city"),
+                "created_at": row["created_at"],
+            })
+        return messages
+
+    def clear_chat_messages(self, owner_id: str) -> int:
+        with self.connect() as conn:
+            cursor = conn.execute("DELETE FROM chat_messages WHERE owner_id=?", (owner_id,))
+        return cursor.rowcount

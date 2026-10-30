@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routes import router
+from app.agent.chat import AgentChatService
 from app.config import settings, validate_settings
 from app.data.seed import DEMO_GUIDES, DEMO_SPOTS
 from app.rag.local import LocalLexicalRetriever
@@ -43,6 +44,8 @@ def create_app(db_path: str | None = None, web_dist: str | None = None) -> FastA
     retriever = LocalLexicalRetriever(DEMO_GUIDES) if settings.evidence_enabled else None
     planning_service = PlanningService(repository, retriever, settings=settings)
     app.state.planning_service = planning_service
+    # 对话服务与规划服务共享同一仓储；LLM/天气均可按环境变量关闭或降级。
+    app.state.agent_chat = AgentChatService(repository, planning_service, settings)
     app.state.login_guard = LoginGuard(
         repository,
         threshold=settings.login_failure_threshold,

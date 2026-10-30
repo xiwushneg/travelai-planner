@@ -4,7 +4,7 @@
 
 本版本不再只是后端 API。打开首页即可填写需求、生成行程、调整某一天、查看版本差异与参考资料，并导出行程 JSON；无需手写请求。
 
-> 当前是功能完整的单城市演示系统，不是生产级在线旅游平台。内置东京演示数据，票价、开放时间和攻略未实时核验；不伪造实时天气、路况、库存或支付能力。
+> 当前是功能完整的单城市演示系统，不是生产级在线旅游平台。内置演示景点数据，票价、开放时间和攻略未实时核验；天气来自 Open-Meteo 免费预报，路况、机酒库存与支付能力不伪造。
 
 ## 普通使用：启动一次，直接打开网页
 
@@ -35,6 +35,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 5. **比较版本**：查看新增、移除、移动、改时和未变化日期；可读取历史版本，历史版本只读。
 6. **查看参考资料**：显示检索摘要、发布方、来源链接与核验状态。
 7. **恢复与导出**：通过“最近行程”继续规划；导出当前行程 JSON。
+8. **AI 对话助手**：顶部「AI 助手」打开右侧抽屉，用自然语言提问（“北京明天天气”“上海3天怎么玩”“住哪里方便”“门票多少钱”），可查询天气预报、住宿区域与价位参考、门票演示数据、攻略证据，并直接生成可打开的行程；对话历史按账号持久化，可一键清空。
 
 失败不会伪装成成功：约束不可行时展示冲突原因与建议；版本过期时提示刷新；未排入的普通候选会明确列出。
 
@@ -45,12 +46,15 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
                │ 同源 /api/v1
                ▼
 FastAPI routes → PlanningService → 确定性 scheduler
-                     │                    │
-                     ├→ 可选本地证据检索    └→ 约束、成本与冲突
-                     └→ Repository → SQLite 版本与运行记录
+   │                 │                    │
+   │                 ├→ 可选本地证据检索    └→ 约束、成本与冲突
+   │                 └→ Repository → SQLite 版本与运行记录
+   └→ AgentChatService（规则意图解析 + 可选 DeepSeek）
+        ├→ 天气：Open-Meteo 免费预报（无需 Key）
+        └→ 住宿/机票/门票：本地规则与演示数据，限制显式标注
 ```
 
-核心排程不依赖外部 LLM、Chroma 或在线服务；相同输入与景点事实得到相同结果。
+核心排程不依赖外部 LLM、Chroma 或在线服务；相同输入与景点事实得到相同结果。对话层同样把事实型回答交给确定性工具，LLM 只用于意图补充与通用问答，避免编造天气、价格或库存。
 
 ## 开发与重新构建前端
 
@@ -104,6 +108,13 @@ python scripts/http_smoke.py --output docs/evidence/fullstack-http-smoke.json
 | `TRAVELAI_AUDIT_KEY` | `travelai-audit` | 审计用户名 HMAC 密钥；生产应设置为随机长串 |
 | `TRAVELAI_SEED_DEMO` | `true` | 空景点库时写入东京演示数据 |
 | `TRAVELAI_EVIDENCE` | `true` | 启用本地词法参考资料检索 |
+| `DEEPSEEK_API_KEY` | 空 | DeepSeek API Key；留空自动降级为规则解析 + 模板回复 |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | OpenAI 兼容接口地址 |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | 对话模型名 |
+| `TRAVELAI_LLM_TIMEOUT_SECONDS` | `25` | 单次 LLM 请求超时（秒） |
+| `TRAVELAI_WEATHER` | `true` | 是否启用 Open-Meteo 天气查询；关闭后天气回答明确标注未启用 |
+| `TRAVELAI_WEATHER_TIMEOUT_SECONDS` | `6` | 天气请求超时（秒） |
+| `TRAVELAI_CHAT_HISTORY_LIMIT` | `100` | 对话历史默认返回条数（接口可传 `limit`，上限 200） |
 
 `.env.example` 只是模板；Python 不会自动加载 `.env`，请通过 shell、容器或进程管理器注入。
 
@@ -137,7 +148,9 @@ Dockerfile 使用 Node 构建前端，再用 Python 运行同源应用，数据�
 - `app/api/routes.py`：HTTP 契约
 - `app/service.py`：创建、修改、比较与证据编排
 - `app/core/scheduler.py`：确定性排程内核
-- `app/repository.py`：SQLite、不可变版本、乐观锁与最近行程
+- `app/repository.py`：SQLite、不可变版本、乐观锁、最近行程与对话历史
+- `app/agent/`：对话编排（意图解析、DeepSeek 客户端、天气/住宿/门票工具）
+- `frontend/src/components/AgentChatPanel.vue`：AI 对话抽屉与卡片渲染
 - `docs/architecture.md`：详细分层和实际调用链
 - `docs/api.md`：接口说明
 - `docs/nginx-deployment-checklist.md`：公网部署 Nginx 配置检查清单
@@ -146,9 +159,11 @@ Dockerfile 使用 Node 构建前端，再用 Python 运行同源应用，数据�
 
 - 内置东京演示数据仅用于体验；现已支持通过后端 CLI 导入景点与攻略，但没有浏览器上传控制台、多租户或完整生产运维体系。
 - 默认通勤仍为球面距离和固定速度估算；可选百度 DirectionLite 仅提供一次路线距离/时长结果，不是实时路况。缺 AK、请求失败或超过限次会显式回退本地估算。
-- 无实时天气、机酒库存、预订或支付；百度真实公网接口需用户自己的 AK、权限与配额，本交付未声称完成真实 AK 联调。
+- 天气来自 Open-Meteo 免费预报，仅覆盖约 16 天窗口；历史日期、超出窗口或网络失败时接口显式返回 `unavailable`，不编造数据。
+- 无实时航班、酒店库存与预订支付：机票类问题只说明限制与建议；住宿按城市档次、房型与区域生成演示价位，并明确标注“不是实时房价”，门票为本地演示价格。
+- 百度路线服务需用户自己的 AK、权限与配额；并发或配额受限时显式回退本地估算并在规划警告中列出。
 - 排程是确定性启发式搜索，不保证数学全局最优；搜索上限与真正无解的区分仍可改进。
 - 预算仅覆盖已排景点门票与市内交通估算，不是完整旅行报价。
-- 本轮没有前端源码改动，沿用已构建页面；未执行跨浏览器或真实移动设备视觉验收，详见验证报告。
+- AI 对话已完成接口冒烟与浏览器界面验证；未执行跨浏览器或真实移动设备视觉验收，详见验证报告。
 
 真实出行前必须独立核验官方开放时间、票价、预约、天气和交通。

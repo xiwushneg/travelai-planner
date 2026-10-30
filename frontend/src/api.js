@@ -73,4 +73,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(body),
   }),
+  chat: (message) => request('/agent/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  }),
+  chatHistory: (limit) => request(`/agent/history${limit ? `?limit=${limit}` : ''}`),
+  clearChatHistory: () => request('/agent/history', { method: 'DELETE' }),
 }

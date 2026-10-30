@@ -57,6 +57,13 @@ class Settings:
     baidu_route_mode: str = os.getenv("BAIDU_ROUTE_MODE", "walking").strip().lower()
     map_timeout_seconds: float = _env_float("TRAVELAI_MAP_TIMEOUT_SECONDS", 4.0, 0.5, 20.0)
     map_max_calls_per_plan: int = _env_int("TRAVELAI_MAP_MAX_CALLS_PER_PLAN", 40, 0, 200)
+    deepseek_api_key: str | None = os.getenv("DEEPSEEK_API_KEY") or None
+    deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    llm_timeout_seconds: float = _env_float("TRAVELAI_LLM_TIMEOUT_SECONDS", 25.0, 2.0, 120.0)
+    weather_enabled: bool = _bool("TRAVELAI_WEATHER", True)
+    weather_timeout_seconds: float = _env_float("TRAVELAI_WEATHER_TIMEOUT_SECONDS", 6.0, 1.0, 30.0)
+    chat_history_limit: int = _env_int("TRAVELAI_CHAT_HISTORY_LIMIT", 100, 10, 500)
 
     @property
     def db_path(self) -> Path:

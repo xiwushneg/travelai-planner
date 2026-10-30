@@ -1,8 +1,9 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { AlertTriangle, ArrowRight, BookOpen, CalendarRange, Check, ChevronDown, CircleAlert, Compass, Database, Download, FileClock, FileText, History, Layers3, Map, MapPin, Plus, RefreshCw, Route, ShieldCheck, SlidersHorizontal, Users, WalletCards } from 'lucide-vue-next'
+import { AlertTriangle, ArrowRight, BookOpen, CalendarRange, Check, ChevronDown, CircleAlert, Compass, Database, Download, FileClock, FileText, History, Layers3, Map, MapPin, Plus, RefreshCw, Route, ShieldCheck, SlidersHorizontal, Sparkles, Users, WalletCards } from 'lucide-vue-next'
 import { api, setUnauthorizedHandler } from './api'
 import LoginPage from './components/LoginPage.vue'
+import AgentChatPanel from './components/AgentChatPanel.vue'
 import SpotPicker from './components/SpotPicker.vue'
 import ItineraryTimeline from './components/ItineraryTimeline.vue'
 import EditDayDialog from './components/EditDayDialog.vue'
@@ -29,6 +30,7 @@ const toast = ref('')
 const advancedOpen = ref(false)
 const editOpen = ref(false)
 const recentOpen = ref(false)
+const chatOpen = ref(false)
 const editingDayNumber = ref(1)
 const latestDiff = ref(null)
 const authUser = ref(null)
@@ -160,6 +162,10 @@ async function showRecent() {
   recentOpen.value = true
   try { recentTrips.value = (await api.listTrips()).trips } catch (error) { notify(error.message) }
 }
+async function openTripFromChat(tripId) {
+  await loadTrip(tripId)
+  chatOpen.value = false
+}
 function exportPlan() { if (plan.value) downloadJson(`travelai-${plan.value.trip_id}-v${plan.value.version}.json`, plan.value) }
 function reloadPage() { window.location.reload() }
 
@@ -215,7 +221,7 @@ onMounted(async () => {
   <div class="app-shell">
     <header class="topbar">
       <button class="brand" type="button" aria-label="TravelAI 首页" @click="newTrip"><span class="brand-mark"><Compass :size="24" /></span><span><strong>TravelAI</strong><small>旅行规划工作台</small></span></button>
-      <nav class="header-actions" aria-label="工作台操作"><span class="service-status" :class="{ offline: pageError && !health }"><i></i>{{ health ? '规划服务已连接' : '正在连接服务' }}</span><template v-if="authUser"><span class="user-chip"><ShieldCheck :size="15" />{{ authUser.username }}</span><button class="button ghost" type="button" @click="showRecent"><History :size="17" />最近行程</button><button class="button dark" type="button" @click="newTrip"><Plus :size="17" />新建行程</button><button class="button ghost" type="button" @click="logout">登出</button><button class="button ghost" type="button" @click="logoutAllDevices">登出所有设备</button></template></nav>
+      <nav class="header-actions" aria-label="工作台操作"><span class="service-status" :class="{ offline: pageError && !health }"><i></i>{{ health ? '规划服务已连接' : '正在连接服务' }}</span><template v-if="authUser"><span class="user-chip"><ShieldCheck :size="15" />{{ authUser.username }}</span><button class="button ghost" type="button" @click="chatOpen = true"><Sparkles :size="17" />AI 助手</button><button class="button ghost" type="button" @click="showRecent"><History :size="17" />最近行程</button><button class="button dark" type="button" @click="newTrip"><Plus :size="17" />新建行程</button><button class="button ghost" type="button" @click="logout">登出</button><button class="button ghost" type="button" @click="logoutAllDevices">登出所有设备</button></template></nav>
     </header>
 
     <LoginPage v-if="authReady && !authUser" @authenticated="handleAuthenticated" />
@@ -263,13 +269,14 @@ onMounted(async () => {
           <details class="assumptions"><summary>查看本次排程假设与版本标识</summary><p v-for="item in plan.assumptions" :key="item">{{ item }}</p><p><strong>规划版本：</strong>{{ plan.planner_version }}</p><p><strong>行程 ID：</strong>{{ plan.trip_id }}</p></details>
         </template>
         <div v-else class="welcome-canvas">
-          <div class="welcome-copy"><p class="eyebrow">FROM BRIEF TO JOURNEY / 02</p><h2>把想去的地方，<br />变成能执行的每一天。</h2><p>左侧填写旅行需求并生成行程。这里会出现逐日时间线、交通与费用估算，你可以继续调整某一天，而不必从头开始。</p><button class="text-link" type="button" @click="showRecent">继续最近的行程<ArrowRight :size="16" /></button></div>
+          <div class="welcome-copy"><p class="eyebrow">FROM BRIEF TO JOURNEY / 02</p><h2>把想去的地方，<br />变成能执行的每一天。</h2><p>左侧填写旅行需求并生成行程。这里会出现逐日时间线、交通与费用估算，你可以继续调整某一天，而不必从头开始。</p><div class="welcome-links"><button class="text-link" type="button" @click="showRecent">继续最近的行程<ArrowRight :size="16" /></button><button class="text-link" type="button" @click="chatOpen = true"><Sparkles :size="16" />和 AI 助手对话规划</button></div></div>
           <div class="journey-board" aria-label="系统功能预览"><div class="board-top"><span>PLANNING WORKSPACE</span><span>TOKYO / DEMO</span></div><div class="board-route"><span class="route-line"></span><article><b>01</b><div><small>DEFINE</small><strong>告诉我们你的需求</strong><p>日期、同行人、候选景点、必去项与预算</p></div></article><article><b>02</b><div><small>SCHEDULE</small><strong>验证并生成日程</strong><p>营业窗口、时间冲突和不可行原因清晰可见</p></div></article><article><b>03</b><div><small>REFINE</small><strong>调整并保留每个版本</strong><p>单日修改、版本对比、证据查看和 JSON 导出</p></div></article></div><div class="board-foot"><Database :size="16" /><span>真实 SQLite 持久化</span><FileText :size="16" /><span>FastAPI + Vue 3</span></div></div>
           <div class="principles"><article><ShieldCheck :size="20" /><div><strong>不制造“看起来可行”</strong><p>硬约束冲突时明确返回原因与调整建议。</p></div></article><article><History :size="20" /><div><strong>修改有迹可循</strong><p>每次成功调整生成不可变版本，可回看差异。</p></div></article></div>
         </div>
       </section>
     </main>
-    <footer class="app-footer"><span>TravelAI · 可验证的旅行规划系统</span><span>无实时天气 / 无实时路况 / 无预订支付</span></footer>
+    <footer class="app-footer"><span>TravelAI · 可验证的旅行规划系统</span><span>天气来自 Open-Meteo 预报 / 无实时路况 / 无预订支付</span></footer>
+    <AgentChatPanel :open="chatOpen" :llm-mode="health?.llm_mode || 'rules'" @close="chatOpen = false" @open-trip="openTripFromChat" />
     <EditDayDialog :open="editOpen" :day="editingDay" :plan="plan" :spots="spots" :saving="savingDay" :error="editError" @close="editOpen = false" @save="saveDay" @refresh="refreshAfterConflict" />
     <RecentTripsDialog :open="recentOpen" :trips="recentTrips" :loading="loadingTrip" @close="recentOpen = false" @open-trip="loadTrip" />
     <div v-if="toast" class="toast" role="status"><Check :size="18" />{{ toast }}</div>
