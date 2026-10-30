@@ -40,6 +40,10 @@ def as_time(value: int) -> time:
     return time(value // 60, value % 60)
 
 
+def _clock(value: int) -> str:
+    return as_time(value).strftime("%H:%M")
+
+
 def ticket_cost(spot: Spot, spec: TripSpec) -> float:
     party = spec.party
     child = spot.child_ticket_cny if spot.child_ticket_cny is not None else spot.adult_ticket_cny
@@ -139,20 +143,27 @@ def _anchor_item(anchor, source: Optional[SourceInfo] = None) -> ScheduleItem:
     )
 
 
-def _fixed_items(spec: TripSpec, day: date) -> Optional[list[ScheduleItem]]:
+def _lunch_item(day: date, start: int, duration: int) -> ScheduleItem:
+    return ScheduleItem(
+        id=f"lunch-{day.isoformat()}",
+        kind="meal",
+        title="午餐与休息",
+        date=day,
+        start_time=as_time(start),
+        end_time=as_time(start + duration),
+        notes=["位置未建模，不计算午餐地点通勤"],
+    )
+
+
+def _fixed_items(
+    spec: TripSpec, day: date, include_lunch: bool = True
+) -> Optional[list[ScheduleItem]]:
+    """不可移动项：锚点；include_lunch 为真时把午餐按原时段一并固定。"""
     items = [_anchor_item(a) for a in spec.anchors if a.date == day]
-    if spec.include_lunch:
+    if include_lunch:
         lunch_start, lunch_end = minutes(spec.lunch_start), minutes(spec.lunch_end)
         if lunch_start >= minutes(spec.daily_start_time) and lunch_end <= minutes(spec.daily_end_time):
-            items.append(ScheduleItem(
-                id=f"lunch-{day.isoformat()}",
-                kind="meal",
-                title="午餐与休息",
-                date=day,
-                start_time=spec.lunch_start,
-                end_time=spec.lunch_end,
-                notes=["位置未建模，不计算午餐地点通勤"],
-            ))
+            items.append(_lunch_item(day, lunch_start, lunch_end - lunch_start))
     items.sort(key=lambda item: (minutes(item.start_time), minutes(item.end_time), item.id))
     previous_end = minutes(spec.daily_start_time)
     day_end = minutes(spec.daily_end_time)
@@ -197,17 +208,96 @@ def _spot_item(spot: Spot, spec: TripSpec, day: date, start: int) -> ScheduleIte
     )
 
 
+def _insert_lunch(
+    spec: TripSpec,
+    day: date,
+    items: list[ScheduleItem],
+) -> tuple[list[ScheduleItem], list[str]]:
+    """午餐软约束：景点排定后择空档插入，优先保留原时段，其次顺延，无空档则取消。
+
+    顺延上限为午餐时长本身（默认 12:00–13:00 最晚 14:00 开始），
+    避免把「午餐」推到傍晚这类名不副实的安排；取消或顺延都写入当日 warnings。
+    """
+    if not spec.include_lunch:
+        return items, []
+    lunch_start, lunch_end = minutes(spec.lunch_start), minutes(spec.lunch_end)
+    if not (
+        minutes(spec.daily_start_time) <= lunch_start
+        and lunch_end <= minutes(spec.daily_end_time)
+    ):
+        return items, []  # 午餐时段不在当日开放窗口内，忽略
+    duration = lunch_end - lunch_start
+    latest_start = lunch_end + duration
+
+    occupied = sorted(items, key=lambda item: (minutes(item.start_time), minutes(item.end_time), item.id))
+    free: list[tuple[int, int]] = []
+    cursor = minutes(spec.daily_start_time)
+    for item in occupied:
+        start, end = minutes(item.start_time), minutes(item.end_time)
+        if start > cursor:
+            free.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < minutes(spec.daily_end_time):
+        free.append((cursor, minutes(spec.daily_end_time)))
+
+    start_found: Optional[int] = None
+    for gap_start, gap_end in free:
+        candidate = max(gap_start, lunch_start)
+        if candidate > latest_start or candidate + duration > gap_end:
+            continue
+        start_found = candidate
+        break
+    if start_found is None:
+        return items, [
+            f"当日行程紧凑，{_clock(lunch_start)}–{_clock(latest_start)} 内没有 "
+            f"{duration} 分钟午餐空档，已取消午餐"
+        ]
+    lunch = _lunch_item(day, start_found, duration)
+    result = sorted(
+        items + [lunch],
+        key=lambda item: (minutes(item.start_time), minutes(item.end_time), item.id),
+    )
+    if start_found == lunch_start:
+        return result, []
+    return result, [
+        f"午餐已顺延至 {_clock(start_found)}–{_clock(start_found + duration)}"
+        f"（原 {_clock(lunch_start)}–{_clock(lunch_end)} 与其他行程冲突）"
+    ]
+
+
 def schedule_day(
     spec: TripSpec,
     day_number: int,
     spots: tuple[Spot, ...],
     route_estimator: Optional[RouteEstimator] = None,
 ) -> Optional[DayPlan]:
-    """为某一天寻找可行的最低通勤估算方案；找不到则返回 None。"""
+    """为某一天寻找可行的最低通勤估算方案；找不到则返回 None。
+
+    先尝试把午餐固定在原时段（保住 12:00–13:00 的常规安排），
+    排不下再退化为「午餐顺延到空档，实在没有则取消」。
+    """
     day = spec.start_date + timedelta(days=day_number - 1)
-    fixed = _fixed_items(spec, day)
-    if fixed is None:
-        return None
+    for lunch_fixed in ((True, False) if spec.include_lunch else (False,)):
+        fixed = _fixed_items(spec, day, include_lunch=lunch_fixed)
+        if fixed is None:
+            continue
+        best = _schedule_with_fixed(
+            spec, day, day_number, spots, fixed, route_estimator, lunch_fixed
+        )
+        if best is not None:
+            return best
+    return None
+
+
+def _schedule_with_fixed(
+    spec: TripSpec,
+    day: date,
+    day_number: int,
+    spots: tuple[Spot, ...],
+    fixed: list[ScheduleItem],
+    route_estimator: Optional[RouteEstimator],
+    lunch_fixed: bool,
+) -> Optional[DayPlan]:
     gaps = _gaps(spec, fixed)
     best: Optional[DayPlan] = None
     best_score = None
@@ -240,6 +330,9 @@ def schedule_day(
 
                 if previous:
                     earliest = max(earliest, minutes(previous.end_time))
+                if earliest + spot.visit_duration_minutes >= 24 * 60:
+                    # 起点已接近午夜，当天不可能完成游览；提前跳过，避免构造跨日时间。
+                    continue
                 if located_previous:
                     probe = _spot_item(spot, spec, day, earliest)
                     leg = travel_between(located_previous, probe, spec.transport, route_estimator)
@@ -264,6 +357,10 @@ def schedule_day(
             continue
 
         items = sorted(fixed + placed, key=lambda item: (minutes(item.start_time), item.id))
+        if lunch_fixed:
+            lunch_warnings: list[str] = []
+        else:
+            items, lunch_warnings = _insert_lunch(spec, day, items)
         total_km = 0.0
         total_travel = 0
         uncomputed: list[TransportGap] = []
@@ -319,8 +416,11 @@ def schedule_day(
                 transport_complete=not uncomputed,
                 uncomputed_legs=uncomputed,
                 warnings=(
-                    [f"{len(uncomputed)} 段通勤缺少坐标未计入总计，已单独标记"]
-                    if uncomputed else []
+                    lunch_warnings
+                    + (
+                        [f"{len(uncomputed)} 段通勤缺少坐标未计入总计，已单独标记"]
+                        if uncomputed else []
+                    )
                 ),
             )
     return best
@@ -566,10 +666,20 @@ def plan_trip(
                 suggestions=["减少必去景点", "延长每日开放时间", "增加天数", "检查锚点是否过密"],
                 details={"search_node_limit": MAX_SEARCH_NODES},
             )])
-        # 每次只移除排名最低的普通候选，并明确记录，不静默丢弃。
-        removed = min(removable, key=lambda s: (_rank(s, spec), s.id))
-        working = [s for s in working if s.id != removed.id]
-        unscheduled.append(removed.id)
+        # 逐个尝试移除：优先选择移除后立刻可行的候选，避免连排得下的景点一起被丢弃。
+        ordered = sorted(removable, key=lambda s: (_rank(s, spec), s.id))
+        chosen = None
+        for candidate in ordered:
+            trial = [s for s in working if s.id != candidate.id]
+            trial_days = attempt(trial)
+            if trial_days is not None:
+                chosen, working, days = candidate, trial, trial_days
+                break
+        if chosen is None:
+            chosen = ordered[0]
+            working = [s for s in working if s.id != chosen.id]
+        # 每次只移除一个普通候选，并明确记录，不静默丢弃。
+        unscheduled.append(chosen.id)
 
     cost = _cost(spec, days, used_spots)
     if spec.budget_cny is not None and cost.total_low_cny > spec.budget_cny:

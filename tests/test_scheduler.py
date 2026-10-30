@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 
 from app.core.models import Anchor, TripSpec
 from app.core.scheduler import minutes, plan_trip
@@ -84,6 +84,121 @@ def test_overlapping_anchors_are_rejected():
     assert result.status == "infeasible"
 
 
+def _full_day_spot():
+    base = DEMO_SPOTS[0]
+    return base.model_copy(update={
+        "id": "tokyo-full-day",
+        "name": "全天景点",
+        "visit_duration_minutes": 600,
+        "opening": base.opening.model_copy(update={
+            "open_time": time(8, 30),
+            "close_time": time(21, 30),
+            "closed_weekdays": [],
+        }),
+    })
+
+
+def test_long_visit_spot_never_crashes_scheduler():
+    # 过长的游览时长曾让探测起点越过 24:00，触发 as_time 的 ValueError；
+    # 午餐改为软约束后，600 分钟景点也能排入，且不会连坐丢弃其他景点。
+    spots = list(DEMO_SPOTS) + [_full_day_spot()]
+    spec = TripSpec(
+        destination="东京",
+        start_date=date(2027, 4, 1),
+        end_date=date(2027, 4, 3),
+        selected_spot_ids=["tokyo-sensoji", "tokyo-odaiba", "tokyo-full-day"],
+    )
+    result = plan_trip(spec, spots)
+    assert result.status == "success", result.model_dump(mode="json")
+    placed = {item.spot_id for day in result.plan.days for item in day.items if item.spot_id}
+    assert placed == {"tokyo-sensoji", "tokyo-odaiba", "tokyo-full-day"}
+    assert result.plan.unscheduled_spot_ids == []
+    full_day = next(
+        day for day in result.plan.days
+        if any(item.spot_id == "tokyo-full-day" for item in day.items)
+    )
+    assert not [item for item in full_day.items if item.kind == "meal"]
+    assert any("已取消午餐" in warning for warning in full_day.warnings)
+
+
+def test_full_day_spot_is_schedulable_without_lunch():
+    spots = list(DEMO_SPOTS) + [_full_day_spot()]
+    spec = TripSpec(
+        destination="东京",
+        start_date=date(2027, 4, 1),
+        end_date=date(2027, 4, 1),
+        selected_spot_ids=["tokyo-full-day"],
+        include_lunch=False,
+    )
+    result = plan_trip(spec, spots)
+    assert result.status == "success", result.model_dump(mode="json")
+    plan = result.plan
+    assert plan.unscheduled_spot_ids == []
+    placed = {item.spot_id for day in plan.days for item in day.items if item.spot_id}
+    assert placed == {"tokyo-full-day"}
+    assert not [item for item in plan.days[0].items if item.kind == "meal"]
+    assert not any("午餐" in warning for warning in plan.days[0].warnings)
+
+
+def test_lunch_keeps_default_slot_when_no_conflict():
+    spec = TripSpec(
+        destination="东京",
+        start_date=date(2027, 4, 1),
+        end_date=date(2027, 4, 1),
+        selected_spot_ids=["tokyo-sensoji"],
+    )
+    day = validate_plan(plan_trip(spec, DEMO_SPOTS)).days[0]
+    meal = next(item for item in day.items if item.kind == "meal")
+    assert (meal.start_time, meal.end_time) == (time(12, 0), time(13, 0))
+    assert not any("午餐" in warning for warning in day.warnings)
+
+
+def test_lunch_shifts_after_spot_forced_across_noon():
+    # 营业窗口 11:00–15:00、游览 180 分钟，景点必然横跨中午，午餐只能顺延。
+    noon_spot = DEMO_SPOTS[0].model_copy(update={
+        "id": "tokyo-noon-spot",
+        "name": "跨午景点",
+        "visit_duration_minutes": 180,
+        "opening": DEMO_SPOTS[0].opening.model_copy(update={
+            "open_time": time(11, 0),
+            "close_time": time(15, 0),
+        }),
+    })
+    spots = list(DEMO_SPOTS) + [noon_spot]
+    spec = TripSpec(
+        destination="东京",
+        start_date=date(2027, 4, 1),
+        end_date=date(2027, 4, 1),
+        selected_spot_ids=["tokyo-noon-spot"],
+    )
+    result = plan_trip(spec, spots)
+    assert result.status == "success", result.model_dump(mode="json")
+    day = result.plan.days[0]
+    noon = next(item for item in day.items if item.spot_id == "tokyo-noon-spot")
+    assert (noon.start_time, noon.end_time) == (time(11, 0), time(14, 0))
+    meal = next(item for item in day.items if item.kind == "meal")
+    assert (meal.start_time, meal.end_time) == (time(14, 0), time(15, 0))
+    assert any("顺延" in warning for warning in day.warnings)
+
+
+def test_lunch_shifts_after_anchor_covering_noon():
+    spec = TripSpec(
+        destination="东京",
+        start_date=date(2027, 4, 1),
+        end_date=date(2027, 4, 1),
+        selected_spot_ids=["tokyo-sensoji"],
+        anchors=[
+            Anchor(title="午餐会议", date=date(2027, 4, 1), start_time="12:00", end_time="14:00"),
+        ],
+    )
+    day = validate_plan(plan_trip(spec, DEMO_SPOTS)).days[0]
+    meal = next(item for item in day.items if item.kind == "meal")
+    assert (meal.start_time, meal.end_time) == (time(14, 0), time(15, 0))
+    anchor = next(item for item in day.items if item.kind == "anchor")
+    assert (anchor.start_time, anchor.end_time) == (time(12, 0), time(14, 0))
+    assert any("顺延" in warning for warning in day.warnings)
+
+
 def test_budget_violation_is_explicit():
     spec = TripSpec(
         destination="东京",
@@ -138,7 +253,10 @@ def test_capacity_omissions_are_reported_and_do_not_inflate_budget():
 
 
 def test_lunch_cross_day_transport_is_complete():
-    """含午餐的跨日行程：午餐继承邻近坐标，通勤链路完整且总计可核对。"""
+    """含午餐的跨日行程：午餐继承邻近坐标，通勤链路完整且总计可核对。
+
+    午餐改为软约束后，排满的日程可能取消午餐，因此这里按「有午餐的日子」校验继承关系。
+    """
     spec = TripSpec(
         destination="东京",
         start_date=date(2027, 4, 1),
@@ -155,9 +273,7 @@ def test_lunch_cross_day_transport_is_complete():
         assert day.items[0].transport_from_previous is None
         for item in day.items:
             assert item.duration_minutes == minutes(item.end_time) - minutes(item.start_time)
-        meals = [item for item in day.items if item.kind == "meal"]
-        assert meals
-        for meal in meals:
+        for meal in (item for item in day.items if item.kind == "meal"):
             # 午餐没有自身坐标，但应继承邻近景点坐标，得到 0 km 的显式通勤段而不是 None。
             assert meal.transport_from_previous is not None
             assert meal.transport_from_previous.distance_km == 0
@@ -167,6 +283,7 @@ def test_lunch_cross_day_transport_is_complete():
         if len([item for item in day.items if item.spot_id]) >= 2:
             assert day.total_travel_km > 0
             assert day.total_travel_minutes > 0
+    assert any(item.kind == "meal" for day in days_with_spots for item in day.items)
 
 
 def test_missing_spot_coordinates_reported_as_gap_not_silent_zero():
